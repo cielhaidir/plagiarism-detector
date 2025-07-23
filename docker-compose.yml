@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: plagiarism_qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - plagiarism_network
+    restart: unless-stopped
+
+  # Fast Plagiarism Detection API
+  plagiarism_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: plagiarism_api
+    ports:
+      - "5001:5001"
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./proposal.csv:/app/proposal.csv:ro
+      - ./indices:/app/indices:ro
+    depends_on:
+      - qdrant
+    networks:
+      - plagiarism_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Original TF-IDF API (Optional)
+  plagiarism_api_original:
+    build:
+      context: .
+      dockerfile: Dockerfile.original
+    container_name: plagiarism_api_original
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./proposal.csv:/app/proposal.csv:ro
+      - ./indices:/app/indices:ro
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+    networks:
+      - plagiarism_network
+    restart: unless-stopped
+    profiles:
+      - original
+
+  # Nginx Load Balancer (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: plagiarism_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - plagiarism_api
+    networks:
+      - plagiarism_network
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  qdrant_storage:
+    driver: local
+
+networks:
+  plagiarism_network:
+    driver: bridge

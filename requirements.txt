@@ -1,0 +1,12 @@
+pandas
+scikit-learn
+nltk
+Flask
+Sastrawi
+numpy>=2.0.0
+joblib
+tqdm
+python-Levenshtein
+gensim
+sentence-transformers
+qdrant-client
