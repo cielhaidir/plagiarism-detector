@@ -95,7 +95,7 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
         exact_score = jaccard_similarity(query_text, matched_text)
         fuzzy_score = levenshtein_similarity(query_text, matched_text)
         semantic_score = sentence_embedding_similarity(query_text, matched_text)
-        final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score)
+        final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score, query_text, matched_text)
 
         results.append({
             'id': int(proposal_id),
@@ -148,7 +148,7 @@ def search_bulk():
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
         texts = data.get('texts', [])
-        top_k = data.get('top_k', 5)
+        top_k = data.get('top_k', 1)
         if not texts:
             return jsonify({"error": "texts array is required"}), 400
         bulk_results = []

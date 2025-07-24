@@ -59,6 +59,35 @@ def sentence_embedding_similarity(text1, text2):
     sim = np.dot(emb[0], emb[1]) / (np.linalg.norm(emb[0]) * np.linalg.norm(emb[1]))
     return float(sim)
 
-def calculate_final_score(exact, fuzzy, semantic, weights=(0.4, 0.3, 0.3)):
-    """Weighted scoring algorithm."""
-    return (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
+def calculate_final_score(exact, fuzzy, semantic, text1="", text2=""):
+    """
+    Calculates a final similarity score using an adaptive weighted algorithm.
+    The weights for exact, fuzzy, and semantic scores are adjusted based on
+    the length of the texts being compared.
+    """
+    len1 = len(text1)
+    len2 = len(text2)
+
+    # Shorter texts rely more on semantic and fuzzy similarity
+    if len1 < 100 or len2 < 100:
+        weights = (0.2, 0.4, 0.4)  # Boost fuzzy and semantic
+    # Medium texts have a balanced approach
+    elif 100 <= len1 < 500 or 100 <= len2 < 500:
+        weights = (0.3, 0.3, 0.4)  # Standard balanced weights
+    # Longer texts can rely more on exact (n-gram) similarity
+    else:
+        weights = (0.5, 0.2, 0.3)  # Boost exact match for long texts
+
+    # Calculate the weighted score
+    final_score = (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
+    
+    # Add a bonus for high semantic similarity, as it's a strong indicator
+    if semantic > 0.9:
+        final_score += 0.05
+        
+    # Add a small bonus for high fuzzy similarity
+    if fuzzy > 0.9:
+        final_score += 0.03
+
+    # Ensure the score does not exceed 1.0
+    return min(final_score, 1.0)
