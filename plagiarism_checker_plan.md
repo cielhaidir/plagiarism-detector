@@ -11,7 +11,7 @@ The entire implementation, especially text processing and cleaning, will be spec
 The system is designed in two main parts: an offline **Indexing** process to prepare the data and an online **API Server** to handle real-time plagiarism checks.
 
 1.  **Phase 1: Indexing (A one-time setup process)**
-    *   The large `proposal.csv` file will be processed once to create an efficient, searchable "index." This index will contain pre-processed text and its corresponding numerical vector representation. This process runs at the start of the application, and the resulting index is saved to disk to avoid re-running it on every launch.
+    *   The large `skripsi_with_skema.csv` file will be processed once to create an efficient, searchable "index." This index will contain pre-processed text and its corresponding numerical vector representation. This process runs at the start of the application, and the resulting index is saved to disk to avoid re-running it on every launch.
 
 2.  **Phase 2: API Server (The live service)**
     *   A lightweight web server (using Flask for Python) will serve the API.
@@ -23,7 +23,7 @@ The system is designed in two main parts: an offline **Indexing** process to pre
 ```mermaid
 graph TD
     subgraph "Phase 1: Indexing (Offline/Startup)"
-        A[Start: proposal.csv] --> B[Run Indexer];
+        A[Start: skripsi_with_skema.csv] --> B[Run Indexer];
         B --> C[Preprocess & Vectorize All Proposals];
         C --> D[Save Index (Vectors & Metadata) to Disk];
     end
@@ -136,10 +136,10 @@ graph TD
 
 ### Phase 1: Indexing
 
-*   **Goal:** To create a fast, searchable database of all proposals from `proposal.csv`.
+*   **Goal:** To create a fast, searchable database of all proposals from `skripsi_with_skema.csv`.
 *   **Technology:** Python with Pandas and Scikit-learn.
 *   **Steps:**
-    1.  **Stream and Process:** Read `proposal.csv` row by row to manage memory usage.
+    1.  **Stream and Process:** Read `skripsi_with_skema.csv` row by row to manage memory usage.
     2.  **Clean and Combine:** For each row, combine and clean the text from all relevant columns (`judul`, `ringkasan`, etc.) using Indonesian language rules.
     3.  **Vectorize with TF-IDF:** Convert the cleaned text into TF-IDF vectors, using a vocabulary and stop word list appropriate for Indonesian.
     4.  **Save Index Files:** Save the trained TF-IDF vectorizer model, the resulting vectors, and a mapping back to the original proposal IDs and schemas. This will likely create a few files on disk (e.g., `tfidf_model.pkl`, `proposal_vectors.npz`, `proposal_metadata.json`).

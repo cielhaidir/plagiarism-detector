@@ -56,7 +56,7 @@ class QdrantPlagiarismSearch:
         """Create sentence embeddings for texts."""
         return self.model.encode(texts).tolist()
     
-    def initialize_collection(self, csv_path: str = "proposal.csv"):
+    def initialize_collection(self, csv_path: str = "skripsi_with_skema.csv"):
         """Initialize Qdrant collection with proposal data."""
         print("Loading proposal data...")
         df = pd.read_csv(csv_path)
@@ -144,9 +144,9 @@ class QdrantPlagiarismSearch:
                 "id": payload["proposal_id"],
                 "skema": payload["skema"],
                 "column": payload["column"],
-                "text": payload["text"][:500] + "..." if len(payload["text"]) > 500 else payload["text"],
+                "text": payload["text"] + "..." if len(payload["text"]) > 500 else payload["text"],
                 "similarity_score": float(hit.score),
-                "matched_text": payload["original_text"][:500] + "..." if len(payload["original_text"]) > 500 else payload["original_text"]
+                "matched_text": payload["original_text"]
             })
         
         return results

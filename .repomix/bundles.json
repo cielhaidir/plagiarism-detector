@@ -1,0 +1,30 @@
+{
+  "bundles": {
+    "plagiarism-check-608": {
+      "name": "plagiarism-check",
+      "created": "2025-07-23T15:45:25.376Z",
+      "lastUsed": "2025-07-23T15:53:34.681Z",
+      "tags": [],
+      "files": [
+        "__pycache__",
+        "indices",
+        ".env",
+        "app.py",
+        "docker-compose.yml",
+        "docker-README.md",
+        "Dockerfile",
+        "Dockerfile.original",
+        "fast_api.py",
+        "indexer.py",
+        "nginx.conf",
+        "plagiarism_checker_plan.md",
+        "qdrant_search.py",
+        "README.md",
+        "requirements.txt",
+        "similarity_utils.py",
+        "test_api.py",
+        "test_qdrant.py"
+      ]
+    }
+  }
+}

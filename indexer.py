@@ -62,6 +62,7 @@ def create_indices(file_path):
     metadata_df.to_csv(metadata_path, index=False)
     print(f"Saved metadata to {metadata_path}")
 
+
     for column in text_columns:
         print(f"\n--- Processing column: {column} ---")
         
@@ -88,4 +89,7 @@ def create_indices(file_path):
     print("\n--- All columns have been processed and indexed. ---")
 
 if __name__ == '__main__':
-    create_indices('proposal.csv')
+    create_indices('skripsi_with_skema.csv')
+    
+def calculate_final_score(exact, fuzzy, semantic, weights=(0.4, 0.3, 0.3)):
+    return (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)

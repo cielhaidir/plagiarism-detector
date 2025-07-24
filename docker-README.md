@@ -165,7 +165,7 @@ docker-compose exec plagiarism_api bash
 ## Data Persistence
 
 - **Qdrant Data**: Stored in `qdrant_storage` volume
-- **Application Data**: Mounted from local `./proposal.csv`
+- **Application Data**: Mounted from local `./skripsi_with_skema.csv`
 - **Logs**: Available via `docker-compose logs`
 
 ## Resource Requirements

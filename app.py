@@ -60,7 +60,7 @@ def load_indices():
             'matrix': tfidf_matrix
         }
     print("Loading original proposal texts for matched_text retrieval...")
-    original_texts = pd.read_csv('proposal.csv')
+    original_texts = pd.read_csv('skripsi_with_skema.csv')
     print("Pre-loading sentence transformer model for faster queries...")
     initialize_sentence_model()
     print("All indices and models loaded successfully!")
