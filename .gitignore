@@ -1,0 +1,5 @@
+.venv
+
+# Embedding cache files
+embeddings_cache.pkl
+*.pkl.cache

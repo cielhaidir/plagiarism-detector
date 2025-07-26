@@ -1,0 +1,1511 @@
+"""
+Plagiarism Detection API Server
+A Flask-based API for detecting plagiarism using sentence transformers and FAISS vector search.
+"""
+
+import os
+import time
+import logging
+import re
+import string
+from typing import Dict, Any, Tuple, Optional, List, Set
+from functools import lru_cache
+from difflib import SequenceMatcher
+
+import numpy as np
+import pickle
+from flask import Flask, request, jsonify
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from dotenv import load_dotenv
+
+# Import enhanced models and text segmentation
+from enhanced_models import EnhancedModelManager, DynamicThresholdManager, create_enhanced_model
+from text_segmentation import TextSegmenter, ScoreAggregator, SegmentResult, AggregatedResult, create_text_segmenter, create_score_aggregator
+
+# Load environment variables
+load_dotenv()
+
+# Configuration
+class Config:
+    """Application configuration"""
+    API_KEY = os.getenv('API_KEY')
+    FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
+    FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))
+    DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Model configuration
+    MODEL_NAME = 'indobenchmark/indobert-base-p2'
+    ENHANCED_MODEL_NAME = os.getenv('ENHANCED_MODEL_NAME', 'multilingual-e5-base')
+    USE_ENHANCED_MODEL = os.getenv('USE_ENHANCED_MODEL', 'true').lower() == 'true'
+    VECTOR_DIR = 'fixed_vector'
+    
+    # Indonesian-specific model options
+    INDONESIAN_MODEL_OPTIONS = {
+        'labse': 'sentence-transformers/LaBSE',
+        'multilingual_distil': 'sentence-transformers/distiluse-base-multilingual-cased',
+        'indobert_base': 'indobenchmark/indobert-base-p1',
+        'indobert_base_p2': 'indobenchmark/indobert-base-p2',
+        'bert_indonesian': 'cahya/bert-base-indonesian-522M',
+        'indobert_large': 'indobenchmark/indobert-large-p1'
+    }
+    
+    # Indonesian text processing settings
+    USE_INDONESIAN_PREPROCESSING = os.getenv('USE_INDONESIAN_PREPROCESSING', 'true').lower() == 'true'
+    USE_INDONESIAN_STEMMING = os.getenv('USE_INDONESIAN_STEMMING', 'false').lower() == 'true'
+    INDONESIAN_STOPWORD_REMOVAL = os.getenv('INDONESIAN_STOPWORD_REMOVAL', 'true').lower() == 'true'
+    
+    # Skema configuration
+    SKEMA_VECTOR_DIR = 'skema_vector'
+    ENABLE_SKEMA_FILTERING = os.getenv('ENABLE_SKEMA_FILTERING', 'true').lower() == 'true'
+    DEFAULT_SKEMA = 'all'
+    
+    # Text segmentation configuration (primary)
+    
+    # Plagiarism detection settings
+    DEFAULT_THRESHOLD = 0.8
+    DYNAMIC_THRESHOLD_ADJUSTMENT = {
+        'long_text': 0.02,  # > 300 words
+        'short_text': -0.05  # < 50 words
+    }
+    
+    # Text segmentation configuration
+    ENABLE_TEXT_SEGMENTATION = os.getenv('ENABLE_TEXT_SEGMENTATION', 'true').lower() == 'true'
+    SEGMENTATION_PROFILE = os.getenv('SEGMENTATION_PROFILE', 'balanced')  # conservative, balanced, aggressive
+    SEGMENTATION_THRESHOLD = int(os.getenv('SEGMENTATION_THRESHOLD', '300'))  # words
+    AGGREGATION_METHOD = os.getenv('AGGREGATION_METHOD', 'top_3_average')  # max, top_k_average, weighted_average
+    
+    # Logging configuration
+    LOG_LEVEL = logging.INFO
+    LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
+    LOG_FILE = 'app.log'
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(
+    level=Config.LOG_LEVEL,
+    format=Config.LOG_FORMAT,
+    handlers=[
+        logging.FileHandler(Config.LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+class IndonesianTextProcessor:
+    """Indonesian-specific text processing utilities"""
+    
+    def __init__(self):
+        self.stopwords = self._load_indonesian_stopwords()
+        self.academic_phrases = self._load_academic_phrases()
+        self.common_prefixes = ['me', 'ber', 'ter', 'pe', 'per', 'se', 'ke', 'di', 'mem', 'men']
+        self.common_suffixes = ['kan', 'an', 'i', 'nya', 'lah', 'kah', 'mu', 'ku']
+    
+    def _load_indonesian_stopwords(self) -> Set[str]:
+        """Load comprehensive Indonesian stopwords"""
+        stopwords = {
+            # Pronouns
+            'saya', 'aku', 'kamu', 'anda', 'dia', 'ia', 'mereka', 'kita', 'kami',
+            'beliau', 'engkau', 'kalian',
+            
+            # Prepositions and conjunctions
+            'yang', 'dan', 'di', 'ke', 'dari', 'dalam', 'untuk', 'pada', 'dengan',
+            'oleh', 'tentang', 'mengenai', 'terhadap', 'hingga', 'sampai', 'sejak',
+            'selama', 'antara', 'bersama', 'tanpa', 'kecuali', 'selain',
+            
+            # Verbs and auxiliaries
+            'adalah', 'akan', 'dapat', 'bisa', 'mampu', 'harus', 'mesti', 'perlu',
+            'ingin', 'mau', 'hendak', 'sedang', 'telah', 'sudah', 'belum', 'pernah',
+            'sering', 'jarang', 'selalu', 'kadang', 'biasa',
+            
+            # Adverbs and determiners
+            'atau', 'juga', 'ini', 'itu', 'tersebut', 'seperti', 'karena', 'sebab',
+            'akibat', 'sehingga', 'bahwa', 'jika', 'kalau', 'apabila', 'bila',
+            'ketika', 'saat', 'waktu', 'tidak', 'bukan', 'jangan',
+            
+            # Quantifiers
+            'ada', 'semua', 'setiap', 'masing', 'beberapa', 'banyak', 'sedikit',
+            'lebih', 'kurang', 'paling', 'sangat', 'sekali', 'cukup', 'agak',
+            'hampir', 'kira', 'sekitar',
+            
+            # Numbers
+            'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan',
+            'sembilan', 'sepuluh', 'pertama', 'kedua', 'ketiga', 'keempat',
+            
+            # Common particles
+            'lah', 'kah', 'tah', 'pun', 'nya'
+        }
+        return stopwords
+    
+    def _load_academic_phrases(self) -> List[str]:
+        """Load common Indonesian academic phrases"""
+        return [
+            'penelitian ini', 'hasil penelitian', 'metode penelitian', 'dalam penelitian',
+            'latar belakang',
+            'tujuan penelitian', 'rumusan masalah', 'tinjauan pustaka', 'kerangka teori',
+            'landasan teori', 'kajian pustaka', 'penelitian terdahulu', 'studi literatur',
+            'analisis data', 'pengumpulan data', 'teknik analisis', 'instrumen penelitian',
+            'populasi dan sampel', 'teknik sampling', 'uji validitas', 'uji reliabilitas',
+            'hasil dan pembahasan', 'kesimpulan dan saran', 'daftar pustaka', 'berdasarkan hasil',
+            'dapat disimpulkan', 'menunjukkan bahwa', 'hal ini menunjukkan', 'sesuai dengan',
+            'sebagaimana yang', 'sebagaimana dikemukakan', 'menurut pendapat', 'berdasarkan teori'
+        ]
+    
+    def clean_indonesian_text(self, text: str) -> str:
+        """Clean Indonesian text for better semantic analysis"""
+        if not text or not isinstance(text, str):
+            return ""
+        
+        # Convert to lowercase
+        text = text.lower()
+        
+        # Remove excessive whitespace and normalize
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Remove special characters but keep Indonesian characters
+        text = re.sub(r'[^\w\s]', ' ', text)
+        
+        # Remove extra spaces created by regex
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def remove_stopwords(self, text: str) -> str:
+        """Remove Indonesian stopwords from text"""
+        words = text.split()
+        filtered_words = [word for word in words if word not in self.stopwords]
+        return ' '.join(filtered_words)
+    
+    def simple_stem(self, word: str) -> str:
+        """Simple Indonesian stemming (remove common prefixes and suffixes)"""
+        original_word = word
+        
+        # Remove suffixes first
+        for suffix in sorted(self.common_suffixes, key=len, reverse=True):
+            if word.endswith(suffix) and len(word) > len(suffix) + 2:
+                word = word[:-len(suffix)]
+                break
+        
+        # Remove prefixes
+        for prefix in sorted(self.common_prefixes, key=len, reverse=True):
+            if word.startswith(prefix) and len(word) > len(prefix) + 2:
+                word = word[len(prefix):]
+                break
+        
+        # Return original word if stemming makes it too short
+        return word if len(word) >= 3 else original_word
+    
+    def stem_text(self, text: str) -> str:
+        """Apply simple stemming to text"""
+        words = text.split()
+        stemmed_words = [self.simple_stem(word) for word in words]
+        return ' '.join(stemmed_words)
+    
+    def calculate_academic_phrase_overlap(self, text1: str, text2: str) -> float:
+        """Calculate overlap of academic phrases between two texts"""
+        text1_lower = text1.lower()
+        text2_lower = text2.lower()
+        
+        phrase_matches = 0
+        total_phrases = len(self.academic_phrases)
+        
+        for phrase in self.academic_phrases:
+            if phrase in text1_lower and phrase in text2_lower:
+                phrase_matches += 1
+        
+        return phrase_matches / total_phrases if total_phrases > 0 else 0.0
+
+# JSON serialization helper
+def make_json_serializable(obj):
+    """Convert numpy types and other non-serializable objects to JSON-compatible types"""
+    if isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    else:
+        return obj
+
+class PlagiarismDetector:
+    """Enhanced plagiarism detection with multi-dimensional analysis"""
+    
+    def __init__(self):
+        """Initialize the plagiarism detector"""
+        self.model = None
+        self.enhanced_model = None
+        self.threshold_manager = None
+        self.text_segmenter = None
+        self.segment_aggregator = None
+        self.vector_indexes: Dict[str, Tuple] = {}  # Legacy flat structure
+        self.skema_vector_indexes: Dict[str, Dict[str, Tuple]] = {}  # Hierarchical structure: skema -> column -> (index, mapping)
+        
+        # Initialize Indonesian text processor if enabled
+        if Config.USE_INDONESIAN_PREPROCESSING:
+            self.indonesian_processor = IndonesianTextProcessor()
+            logger.info("Indonesian text processor initialized")
+        else:
+            self.indonesian_processor = None
+            
+        self._load_model()
+        self._load_enhanced_model()
+        self._load_segmentation_tools()
+    
+    def _load_model(self) -> None:
+        """Load the SentenceTransformer model"""
+        try:
+            logger.info(f"Loading legacy model: {Config.MODEL_NAME}")
+            self.model = SentenceTransformer(Config.MODEL_NAME)
+            logger.info("Legacy model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load legacy model: {e}")
+            raise
+    
+    def _load_enhanced_model(self) -> None:
+        """Load enhanced model and threshold manager"""
+        if not Config.USE_ENHANCED_MODEL:
+            logger.info("Enhanced model disabled, using legacy model only")
+            return
+            
+        try:
+            logger.info(f"Loading enhanced model: {Config.ENHANCED_MODEL_NAME}")
+            self.enhanced_model = create_enhanced_model(Config.ENHANCED_MODEL_NAME)
+            self.threshold_manager = DynamicThresholdManager()
+            
+            model_info = self.enhanced_model.get_model_info()
+            logger.info(f"Enhanced model loaded: {model_info['description']}")
+            logger.info(f"Embedding dimension: {model_info['embedding_dimension']}")
+            logger.info(f"E5-style encoding: {model_info['use_e5_style']}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load enhanced model, falling back to legacy: {e}")
+            self.enhanced_model = None
+            self.threshold_manager = None
+    
+    def _load_segmentation_tools(self) -> None:
+        """Load text segmentation and aggregation tools"""
+        if not Config.ENABLE_TEXT_SEGMENTATION:
+            logger.info("Text segmentation disabled")
+            return
+            
+        try:
+            logger.info(f"Loading text segmentation with profile: {Config.SEGMENTATION_PROFILE}")
+            self.text_segmenter = create_text_segmenter(Config.SEGMENTATION_PROFILE)
+            self.segment_aggregator = ScoreAggregator()
+            
+            logger.info(f"Text segmentation loaded - threshold: {Config.SEGMENTATION_THRESHOLD} words")
+            logger.info(f"Aggregation method: {Config.AGGREGATION_METHOD}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load text segmentation tools: {e}")
+            self.text_segmenter = None
+            self.segment_aggregator = None
+    
+    @staticmethod
+    def clean_text(text: str) -> str:
+        """
+        Clean and normalize text by removing extra spaces and duplicate sentences
+        
+        Args:
+            text: Input text to clean
+            
+        Returns:
+            Cleaned text string
+        """
+        if not text or not isinstance(text, str):
+            return ""
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Split into sentences and remove duplicates while preserving order
+        sentences = text.split('.')
+        unique_sentences = []
+        seen = set()
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if sentence and sentence not in seen:
+                unique_sentences.append(sentence)
+                seen.add(sentence)
+        
+        return '. '.join(unique_sentences)
+    
+    def calculate_dynamic_threshold(self, query: str, column: str = None, base_threshold: float = None) -> float:
+        """
+        Calculate dynamic threshold using enhanced threshold manager if available
+        
+        Args:
+            query: Input query text
+            column: Column name for column-specific thresholds
+            base_threshold: Base threshold value
+            
+        Returns:
+            Adjusted threshold value
+        """
+        if self.threshold_manager and column:
+            # Use enhanced dynamic threshold system
+            word_count = len(query.split()) if query else 0
+            return self.threshold_manager.get_threshold(column, word_count)
+        
+        # Fallback to legacy calculation
+        if base_threshold is None:
+            base_threshold = Config.DEFAULT_THRESHOLD
+        
+        if not query:
+            return base_threshold
+        
+        word_count = len(query.split())
+        
+        if word_count > 300:
+            return base_threshold + Config.DYNAMIC_THRESHOLD_ADJUSTMENT['long_text']
+        elif word_count < 50:
+            return base_threshold + Config.DYNAMIC_THRESHOLD_ADJUSTMENT['short_text']
+        
+        return base_threshold
+    
+    def load_vector_database(self, column: str, skema: Optional[str] = None) -> Tuple[Any, Dict]:
+        """
+        Load FAISS index and mapping for a specific column, optionally filtered by skema
+        
+        Args:
+            column: Column name to load vector database for
+            skema: Optional skema to filter by. If None, uses legacy flat structure
+            
+        Returns:
+            Tuple of (FAISS index, index_to_text mapping)
+            
+        Raises:
+            FileNotFoundError: If vector database file doesn't exist
+            ValueError: If data loading fails
+        """
+        if skema and Config.ENABLE_SKEMA_FILTERING:
+            # Use hierarchical skema structure
+            skema_safe = str(skema).replace(' ', '_')
+            file_path = os.path.join(Config.SKEMA_VECTOR_DIR, skema_safe, f"vector_index_{column}.pkl")
+            
+            if not os.path.exists(file_path):
+                # Fallback to legacy structure if skema-specific not found
+                logger.warning(f"Skema-specific vector not found at {file_path}, falling back to legacy")
+                return self._load_legacy_vector(column)
+        else:
+            # Use legacy flat structure
+            return self._load_legacy_vector(column)
+        
+        try:
+            with open(file_path, "rb") as f:
+                data = pickle.load(f)
+            
+            if 'index' not in data or 'mapping' not in data:
+                raise ValueError(f"Invalid vector database format for column '{column}' in skema '{skema}'")
+            
+            logger.info(f"Successfully loaded vector database for skema '{skema}', column: {column}")
+            return data["index"], data["mapping"]
+            
+        except Exception as e:
+            logger.error(f"Failed to load vector database for '{skema}/{column}': {e}")
+            raise ValueError(f"Failed to load vector database for '{skema}/{column}': {e}")
+    
+    def _load_legacy_vector(self, column: str) -> Tuple[Any, Dict]:
+        """Load legacy flat vector structure"""
+        file_path = os.path.join(Config.VECTOR_DIR, f"latest_vector_index_{column}.pkl")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Vector database for '{column}' not found at {file_path}")
+        
+        try:
+            with open(file_path, "rb") as f:
+                data = pickle.load(f)
+            
+            if 'index' not in data or 'mapping' not in data:
+                raise ValueError(f"Invalid vector database format for column '{column}'")
+            
+            logger.info(f"Successfully loaded legacy vector database for column: {column}")
+            return data["index"], data["mapping"]
+            
+        except Exception as e:
+            logger.error(f"Failed to load legacy vector database for '{column}': {e}")
+            raise ValueError(f"Failed to load legacy vector database for '{column}': {e}")
+    
+    @staticmethod
+    def is_plagiarism(similarity_score: float, threshold: float) -> bool:
+        """
+        Determine if similarity score indicates plagiarism
+        
+        Args:
+            similarity_score: Cosine similarity score
+            threshold: Plagiarism threshold
+            
+        Returns:
+            True if plagiarism detected, False otherwise
+        """
+        return similarity_score >= threshold
+    
+    @staticmethod
+    def preprocess_for_lexical_analysis(text: str) -> str:
+        """Preprocess text for lexical comparison"""
+        if not text:
+            return ""
+        
+        # Convert to lowercase and remove punctuation
+        text = text.lower()
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def calculate_lexical_overlap(self, text1: str, text2: str) -> Dict[str, float]:
+        """
+        Calculate various lexical overlap metrics between two texts
+        
+        Args:
+            text1: First text for comparison
+            text2: Second text for comparison
+            
+        Returns:
+            Dictionary containing various lexical overlap scores
+        """
+        # Use Indonesian-enhanced analysis if available
+        if Config.USE_INDONESIAN_PREPROCESSING and self.indonesian_processor:
+            return self.enhanced_lexical_analysis_indonesian(text1, text2)
+        
+        # Standard preprocessing for non-Indonesian analysis
+        processed_text1 = self.preprocess_for_lexical_analysis(text1)
+        processed_text2 = self.preprocess_for_lexical_analysis(text2)
+        
+        if not processed_text1 or not processed_text2:
+            return {
+                'jaccard_similarity': 0.0,
+                'word_overlap_ratio': 0.0,
+                'sequence_similarity': 0.0
+            }
+        
+        # Tokenize into words
+        words1 = set(processed_text1.split())
+        words2 = set(processed_text2.split())
+        
+        # Calculate Jaccard similarity (word level)
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        jaccard_similarity = intersection / union if union > 0 else 0.0
+        
+        # Calculate word overlap ratio
+        word_overlap_ratio = intersection / min(len(words1), len(words2)) if min(len(words1), len(words2)) > 0 else 0.0
+        
+        # Calculate sequence similarity using difflib
+        sequence_similarity = SequenceMatcher(None, processed_text1, processed_text2).ratio()
+        
+        return {
+            'jaccard_similarity': round(jaccard_similarity, 4),
+            'word_overlap_ratio': round(word_overlap_ratio, 4),
+            'sequence_similarity': round(sequence_similarity, 4)
+        }
+    
+    def enhanced_lexical_analysis_indonesian(self, text1: str, text2: str) -> Dict[str, float]:
+        """Enhanced lexical analysis optimized for Indonesian"""
+        # Clean texts for Indonesian processing
+        clean_text1 = self.indonesian_processor.clean_indonesian_text(text1)
+        clean_text2 = self.indonesian_processor.clean_indonesian_text(text2)
+        
+        # Remove stopwords if enabled
+        if Config.INDONESIAN_STOPWORD_REMOVAL:
+            clean_text1 = self.indonesian_processor.remove_stopwords(clean_text1)
+            clean_text2 = self.indonesian_processor.remove_stopwords(clean_text2)
+        
+        # Apply stemming if enabled
+        if Config.USE_INDONESIAN_STEMMING:
+            clean_text1 = self.indonesian_processor.stem_text(clean_text1)
+            clean_text2 = self.indonesian_processor.stem_text(clean_text2)
+        
+        # Calculate standard lexical metrics on processed text
+        if not clean_text1 or not clean_text2:
+            base_metrics = {
+                'jaccard_similarity': 0.0,
+                'word_overlap_ratio': 0.0,
+                'sequence_similarity': 0.0
+            }
+        else:
+            # Tokenize into words
+            words1 = set(clean_text1.split())
+            words2 = set(clean_text2.split())
+            
+            # Calculate Jaccard similarity (word level)
+            intersection = len(words1.intersection(words2))
+            union = len(words1.union(words2))
+            jaccard_similarity = intersection / union if union > 0 else 0.0
+            
+            # Calculate word overlap ratio
+            word_overlap_ratio = intersection / min(len(words1), len(words2)) if min(len(words1), len(words2)) > 0 else 0.0
+            
+            # Calculate sequence similarity using difflib
+            sequence_similarity = SequenceMatcher(None, clean_text1, clean_text2).ratio()
+            
+            base_metrics = {
+                'jaccard_similarity': round(jaccard_similarity, 4),
+                'word_overlap_ratio': round(word_overlap_ratio, 4),
+                'sequence_similarity': round(sequence_similarity, 4)
+            }
+        
+        # Add Indonesian-specific metrics
+        academic_overlap = self.indonesian_processor.calculate_academic_phrase_overlap(text1, text2)
+        
+        # Enhanced metrics
+        enhanced_metrics = {
+            **base_metrics,
+            'academic_phrase_overlap': round(academic_overlap, 4),
+            'indonesian_processed': True
+        }
+        
+        return enhanced_metrics
+    
+    def intelligent_plagiarism_classification(self, semantic_score: float, lexical_metrics: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Classify plagiarism using intelligent rules that combine semantic and lexical analysis
+        
+        Args:
+            semantic_score: Cosine similarity score
+            lexical_metrics: Dictionary of lexical overlap metrics
+            
+        Returns:
+            Classification result with detailed analysis
+        """
+        # Extract key metrics
+        jaccard_sim = lexical_metrics['jaccard_similarity']
+        sequence_sim = lexical_metrics['sequence_similarity']
+        
+        # Classification logic
+        classification = "Unknown"
+        confidence = 0.0
+        risk_level = "Low"
+        explanation = []
+        
+        # Rule 1: Direct copying detection
+        if sequence_sim > 0.8 and semantic_score > 0.9:
+            classification = "Direct Plagiarism"
+            confidence = 0.95
+            risk_level = "Very High"
+            explanation.append("High sequence similarity indicates direct copying")
+            
+        # Rule 2: Heavy lexical overlap with high semantic similarity
+        elif jaccard_sim > 0.7 and semantic_score > 0.85:
+            classification = "Substantial Plagiarism"
+            confidence = 0.90
+            risk_level = "High"
+            explanation.append("Significant word overlap suggests minimal rewording")
+            
+        # Rule 3: Moderate lexical overlap with high semantic similarity
+        elif jaccard_sim > 0.5 and semantic_score > 0.8:
+            classification = "Moderate Plagiarism"
+            confidence = 0.75
+            risk_level = "Medium"
+            explanation.append("Moderate similarity may indicate insufficient paraphrasing")
+            
+        # Rule 4: High semantic but low lexical - good paraphrasing
+        elif semantic_score > 0.8 and jaccard_sim < 0.4:
+            classification = "Legitimate Paraphrase"
+            confidence = 0.85
+            risk_level = "Low"
+            explanation.append("High semantic similarity with low lexical overlap suggests proper paraphrasing")
+            
+        # Rule 5: Medium semantic with very low lexical - likely original
+        elif semantic_score > 0.6 and jaccard_sim < 0.3:
+            classification = "Acceptable Similarity"
+            confidence = 0.80
+            risk_level = "Low"
+            explanation.append("Moderate semantic similarity with minimal lexical overlap")
+            
+        # Rule 6: Low semantic similarity
+        elif semantic_score < 0.6:
+            classification = "Original Content"
+            confidence = 0.90
+            risk_level = "None"
+            explanation.append("Low semantic similarity indicates original content")
+            
+        # Rule 7: Edge cases
+        else:
+            classification = "Requires Review"
+            confidence = 0.60
+            risk_level = "Medium"
+            explanation.append("Pattern requires manual review")
+        
+        return {
+            'classification': classification,
+            'confidence': round(confidence, 3),
+            'risk_level': risk_level,
+            'explanation': explanation,
+            'is_plagiarism': classification in ['Direct Plagiarism', 'Substantial Plagiarism', 'Moderate Plagiarism']
+        }
+    
+    def search_vector_database(self, query_text: str, column: str, top_k: int = 1, 
+                             threshold: Optional[float] = None, skema: Optional[str] = None,
+                             enable_segmentation: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Search for similar texts in vector database
+        
+        Args:
+            query_text: Input text for similarity search
+            column: Column to search in
+            top_k: Number of top results to return
+            threshold: Custom plagiarism threshold
+            
+        Returns:
+            Dictionary containing search results and plagiarism assessment
+        """
+        if not query_text or not query_text.strip():
+            raise ValueError("Query text cannot be empty")
+        
+        if not column:
+            raise ValueError("Column parameter is required")
+        
+        # Clean the query text
+        cleaned_query = self.clean_text(query_text)
+        
+        # Check if we should use segmentation
+        should_segment = self._should_use_segmentation(cleaned_query, enable_segmentation)
+        
+        if should_segment:
+            logger.info(f"Using segmented search for long text ({self.text_segmenter.count_words(cleaned_query)} words)")
+            return self._search_with_segmentation(cleaned_query, column, top_k, threshold, skema)
+        
+        # Use regular single-text search
+        return self._search_single_text(cleaned_query, column, top_k, threshold, skema)
+    
+    def _should_use_segmentation(self, text: str, force_enable: Optional[bool] = None) -> bool:
+        """Determine if text segmentation should be used"""
+        if force_enable is not None:
+            return force_enable and self.text_segmenter is not None
+        
+        if not Config.ENABLE_TEXT_SEGMENTATION or not self.text_segmenter:
+            return False
+        
+        word_count = self.text_segmenter.count_words(text)
+        return word_count >= Config.MIN_WORDS_FOR_SEGMENTATION
+    
+    def _search_single_text(self, cleaned_query: str, column: str, top_k: int, 
+                           threshold: Optional[float], skema: Optional[str]) -> Dict[str, Any]:
+        """Perform single-text search (original method)"""
+        # Calculate dynamic threshold with enhanced system
+        if threshold is None:
+            threshold = self.calculate_dynamic_threshold(cleaned_query, column)
+        
+        # Determine cache key based on skema filtering
+        if skema and Config.ENABLE_SKEMA_FILTERING:
+            cache_key = f"{skema}::{column}"
+            if cache_key not in self.skema_vector_indexes:
+                try:
+                    index, index_to_text = self.load_vector_database(column, skema)
+                    if skema not in self.skema_vector_indexes:
+                        self.skema_vector_indexes[skema] = {}
+                    self.skema_vector_indexes[skema][column] = (index, index_to_text)
+                except Exception as e:
+                    logger.error(f"Error loading vector database for skema '{skema}', column '{column}': {e}")
+                    raise
+            else:
+                index, index_to_text = self.skema_vector_indexes[skema][column]
+        else:
+            # Use legacy caching
+            if column not in self.vector_indexes:
+                try:
+                    index, index_to_text = self.load_vector_database(column)
+                    self.vector_indexes[column] = (index, index_to_text)
+                except Exception as e:
+                    logger.error(f"Error loading vector database for column '{column}': {e}")
+                    raise
+            else:
+                index, index_to_text = self.vector_indexes[column]
+        
+        try:
+            # Encode query text using enhanced model if available
+            if self.enhanced_model:
+                query_vector = np.array([self.enhanced_model.encode_query(cleaned_query)], dtype=np.float32)
+                logger.debug(f"Using enhanced model for encoding: {Config.ENHANCED_MODEL_NAME}")
+            else:
+                query_vector = np.array([self.model.encode(cleaned_query)], dtype=np.float32)
+                logger.debug("Using legacy model for encoding")
+            
+            # Search using FAISS
+            _, result_indices = index.search(query_vector, k=top_k)
+            
+            if len(result_indices[0]) == 0:
+                result = {
+                    'similarity_score': 0.0,
+                    'is_plagiarism': False,
+                    'most_similar_article': None,
+                    'most_similar_article_id': None,
+                    'most_similar_article_judul': None,
+                    'threshold_used': threshold,
+                    'analysis_type': 'basic'
+                }
+                return make_json_serializable(result)
+            
+            # Get the most similar result
+            best_match_idx = result_indices[0][0]
+            best_match = index_to_text[best_match_idx]
+            reference_text = best_match['text']
+            
+            # Use stored vectors for similarity calculation
+            similar_vectors = np.array([best_match['vector']], dtype=np.float32)
+            similarities = cosine_similarity(query_vector, similar_vectors)
+            
+            semantic_score = float(similarities[0][0])
+            
+            # Perform enhanced analysis
+            lexical_metrics = self.calculate_lexical_overlap(cleaned_query, reference_text)
+            classification_result = self.intelligent_plagiarism_classification(semantic_score, lexical_metrics)
+            
+            composite_score = self.calculate_composite_similarity_score(semantic_score, lexical_metrics)
+    
+            # Legacy threshold-based result for backward compatibility
+            threshold_based_plagiarism = self.is_plagiarism(composite_score, threshold)  # Use composite score
+            # threshold_based_plagiarism = self.is_plagiarism(semantic_score, threshold)
+            
+            result = {
+                # Legacy fields for backward compatibility
+                # 'similarity_score': round(semantic_score, 4),
+                'similarity_score': round(composite_score, 4),
+                'is_plagiarism': classification_result['is_plagiarism'],
+                'most_similar_article': reference_text,
+                'most_similar_article_id': best_match.get('id'),
+                'most_similar_article_judul': best_match.get('judul'),
+                'threshold_used': threshold,
+                
+                # Enhanced analysis fields
+                'analysis_type': 'indonesian_optimized' if (Config.USE_INDONESIAN_PREPROCESSING and self.indonesian_processor) else 'single_text',
+                'semantic_similarity': round(semantic_score, 4),
+                'lexical_analysis': lexical_metrics,
+                'classification': classification_result,
+                'legacy_threshold_result': threshold_based_plagiarism,
+                
+                # Indonesian-specific fields (if enabled)
+                'indonesian_optimized': Config.USE_INDONESIAN_PREPROCESSING and self.indonesian_processor is not None,
+                'stopword_removal_used': Config.INDONESIAN_STOPWORD_REMOVAL if Config.USE_INDONESIAN_PREPROCESSING else False,
+                'stemming_used': Config.USE_INDONESIAN_STEMMING if Config.USE_INDONESIAN_PREPROCESSING else False,
+                
+                # Model information
+                'model_used': Config.ENHANCED_MODEL_NAME if self.enhanced_model else Config.MODEL_NAME,
+                'enhanced_model_active': self.enhanced_model is not None,
+                
+                # Text processing information
+                'segmentation_used': False,
+                'text_length_words': self.text_segmenter.count_words(cleaned_query) if self.text_segmenter else len(cleaned_query.split()),
+                
+                # Skema information
+                'search_skema': skema,
+                'result_skema': best_match.get('skema'),
+                
+                # Summary
+                'confidence_score': classification_result['confidence'],
+                'risk_level': classification_result['risk_level'],
+                'explanation': classification_result['explanation']
+            }
+            
+            # Ensure all values are JSON serializable
+            return make_json_serializable(result)
+            
+        except Exception as e:
+            logger.error(f"Error during vector search: {e}")
+            raise ValueError(f"Search failed: {e}")
+    
+    def calculate_composite_similarity_score(self, semantic_score: float, lexical_metrics: Dict[str, float]) -> float:
+        """
+        Calculate composite similarity score with emphasis on lexical overlap for plagiarism detection
+        """
+        # Use Indonesian-optimized calculation if available
+        if Config.USE_INDONESIAN_PREPROCESSING and self.indonesian_processor:
+            return self.calculate_indonesian_composite_similarity(semantic_score, lexical_metrics)
+        
+        # Standard composite calculation
+        jaccard = lexical_metrics.get('jaccard_similarity', 0.0)
+        word_overlap = lexical_metrics.get('word_overlap_ratio', 0.0)
+        sequence_sim = lexical_metrics.get('sequence_similarity', 0.0)
+        
+        # If word overlap is very high (>0.8), prioritize lexical metrics heavily
+        if word_overlap > 0.8:
+            weights = {
+                'semantic': 0.2,        # Lower weight for semantic when lexical overlap is high
+                'jaccard': 0.3,         # Higher weight for Jaccard
+                'word_overlap': 0.4,    # Highest weight for word overlap
+                'sequence': 0.1         # Sequence similarity
+            }
+        # If word overlap is moderate (0.5-0.8), balance both
+        elif word_overlap > 0.5:
+            weights = {
+                'semantic': 0.4,
+                'jaccard': 0.25,
+                'word_overlap': 0.25,
+                'sequence': 0.1
+            }
+        # If word overlap is low (<0.5), prioritize semantic similarity
+        else:
+            weights = {
+                'semantic': 0.6,
+                'jaccard': 0.15,
+                'word_overlap': 0.15,
+                'sequence': 0.1
+            }
+        
+        composite_score = (
+            weights['semantic'] * semantic_score +
+            weights['jaccard'] * jaccard +
+            weights['word_overlap'] * word_overlap +
+            weights['sequence'] * sequence_sim
+        )
+        
+        return max(0.0, min(composite_score, 1.0))
+    
+    def calculate_indonesian_composite_similarity(self, semantic_score: float, lexical_metrics: Dict[str, float]) -> float:
+        """Calculate composite similarity optimized for Indonesian plagiarism detection"""
+        jaccard = lexical_metrics.get('jaccard_similarity', 0.0)
+        word_overlap = lexical_metrics.get('word_overlap_ratio', 0.0)
+        sequence_sim = lexical_metrics.get('sequence_similarity', 0.0)
+        academic_overlap = lexical_metrics.get('academic_phrase_overlap', 0.0)
+        
+        # Adjust semantic score based on academic phrase overlap
+        if academic_overlap > 0.3:
+            adjusted_semantic = semantic_score * 0.95  # Slight penalty for high academic overlap
+        elif academic_overlap > 0.1:
+            adjusted_semantic = semantic_score * 0.98
+        else:
+            adjusted_semantic = semantic_score
+        
+        # Indonesian-optimized weighting
+        if word_overlap > 0.9:  # Very high overlap - direct copying
+            weights = {'semantic': 0.1, 'jaccard': 0.3, 'word_overlap': 0.5, 'sequence': 0.1}
+        elif word_overlap > 0.7:  # High overlap - minimal changes
+            weights = {'semantic': 0.2, 'jaccard': 0.3, 'word_overlap': 0.4, 'sequence': 0.1}
+        elif adjusted_semantic > 0.8 and word_overlap < 0.4:  # Good paraphrasing
+            weights = {'semantic': 0.7, 'jaccard': 0.1, 'word_overlap': 0.1, 'sequence': 0.1}
+        else:  # Balanced
+            weights = {'semantic': 0.5, 'jaccard': 0.2, 'word_overlap': 0.2, 'sequence': 0.1}
+        
+        composite_score = (
+            weights['semantic'] * adjusted_semantic +
+            weights['jaccard'] * jaccard +
+            weights['word_overlap'] * word_overlap +
+            weights['sequence'] * sequence_sim
+        )
+        
+        return max(0.0, min(composite_score, 1.0))
+    def _search_with_segmentation(self, cleaned_query: str, column: str, top_k: int, 
+                                 threshold: Optional[float], skema: Optional[str]) -> Dict[str, Any]:
+        """Perform segmented search for long texts"""
+        try:
+            # Split text into segments
+            segments = self.text_segmenter.intelligent_split(cleaned_query)
+            logger.info(f"Split text into {len(segments)} segments")
+            
+            if len(segments) <= 1:
+                # Fallback to single text search if no segmentation occurred
+                return self._search_single_text(cleaned_query, column, top_k, threshold, skema)
+            
+            # Search each segment
+            segment_results = []
+            for i, segment in enumerate(segments):
+                try:
+                    # Search this segment using single text method
+                    segment_result = self._search_single_text(segment, column, 1, threshold, skema)
+                    
+                    # Create SegmentResult object
+                    seg_result = SegmentResult(
+                        segment_text=segment,
+                        segment_index=i,
+                        similarity_score=segment_result['similarity_score'],
+                        most_similar_text=segment_result['most_similar_article'] or '',
+                        most_similar_id=segment_result['most_similar_article_id'],
+                        threshold_used=segment_result['threshold_used'],
+                        is_plagiarism=segment_result['is_plagiarism']
+                    )
+                    segment_results.append(seg_result)
+                    
+                    logger.debug(f"Segment {i+1}: similarity={seg_result.similarity_score:.4f}, plagiarism={seg_result.is_plagiarism}")
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing segment {i+1}: {e}")
+                    # Continue with other segments
+                    continue
+            
+            if not segment_results:
+                # If no segments could be processed, return empty result
+                return {
+                    'similarity_score': 0.0,
+                    'is_plagiarism': False,
+                    'analysis_type': 'segmented_failed',
+                    'error': 'No segments could be processed',
+                    'segmentation_used': True
+                }
+            
+            # Aggregate results
+            aggregated_result = self.score_aggregator.aggregate_scores(segment_results)
+            
+            # Get overall best match for reference
+            best_segment = max(segment_results, key=lambda x: x.similarity_score)
+            
+            # Build final result
+            result = {
+                # Legacy fields for backward compatibility
+                'similarity_score': aggregated_result.max_similarity,
+                'is_plagiarism': aggregated_result.plagiarism_segments > 0,
+                'most_similar_article': best_segment.most_similar_text,
+                'most_similar_article_id': best_segment.most_similar_id,
+                'threshold_used': best_segment.threshold_used,
+                
+                # Segmentation-specific fields
+                'analysis_type': 'segmented',
+                'segmentation_used': True,
+                'segmentation_info': {
+                    'total_segments': aggregated_result.total_segments,
+                    'plagiarism_segments': aggregated_result.plagiarism_segments,
+                    'strategy_used': self.score_aggregator.strategy,
+                    'text_length_words': self.text_segmenter.count_words(cleaned_query)
+                },
+                
+                # Aggregated scores
+                'aggregated_results': {
+                    'max_similarity': aggregated_result.max_similarity,
+                    'avg_similarity': aggregated_result.avg_similarity,
+                    'top3_avg_similarity': aggregated_result.top3_avg_similarity,
+                    'classification': aggregated_result.aggregated_classification,
+                    'confidence_score': aggregated_result.confidence_score
+                },
+                
+                # Model information
+                'model_used': Config.ENHANCED_MODEL_NAME if self.enhanced_model else Config.MODEL_NAME,
+                'enhanced_model_active': self.enhanced_model is not None,
+                
+                # Skema information
+                'search_skema': skema,
+                
+                # Detailed segment results (optional - can be large)
+                'detailed_segments': [
+                    {
+                        'segment_index': seg.segment_index,
+                        'similarity_score': seg.similarity_score,
+                        'is_plagiarism': seg.is_plagiarism,
+                        'segment_preview': seg.segment_text[:100] + '...' if len(seg.segment_text) > 100 else seg.segment_text
+                    }
+                    for seg in segment_results
+                ],
+                
+                # Summary
+                'confidence_score': aggregated_result.confidence_score,
+                'risk_level': 'High' if aggregated_result.plagiarism_segments / aggregated_result.total_segments > 0.6 else 'Medium' if aggregated_result.plagiarism_segments > 0 else 'Low',
+                'explanation': [f"Analyzed {aggregated_result.total_segments} segments", 
+                              f"Found {aggregated_result.plagiarism_segments} potentially plagiarized segments",
+                              f"Aggregation strategy: {self.score_aggregator.strategy}"]
+            }
+            
+            logger.info(f"Segmented search completed: {aggregated_result.total_segments} segments, {aggregated_result.plagiarism_segments} flagged")
+            return make_json_serializable(result)
+            
+        except Exception as e:
+            logger.error(f"Error in segmented search: {e}")
+            # Fallback to single text search
+            logger.warning("Falling back to single text search due to segmentation error")
+            fallback_result = self._search_single_text(cleaned_query, column, top_k, threshold, skema)
+            fallback_result['segmentation_fallback'] = True
+            fallback_result['segmentation_error'] = str(e)
+            return fallback_result
+
+# Initialize detector
+detector = PlagiarismDetector()
+
+# Request validation helpers
+def validate_api_key() -> Optional[Tuple[Dict, int]]:
+    """Validate API key from request headers"""
+    if not Config.API_KEY:
+        logger.warning("API_KEY not configured")
+        return jsonify({"error": "Server configuration error"}), 500
+    
+    key = request.headers.get('X-API-KEY')
+    if key != Config.API_KEY:
+        logger.warning(f"Invalid API key attempt from {request.remote_addr}")
+        return jsonify({"error": "Unauthorized: Invalid API Key"}), 401
+    
+    return None
+
+def validate_search_request(data: Dict) -> Optional[Tuple[Dict, int]]:
+    """Validate search request data with skema support"""
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+    
+    query_text = data.get('query_text')
+    column = data.get('column')
+    skema = data.get('skema')
+    
+    if not query_text or not query_text.strip():
+        return jsonify({"error": "Missing or empty 'query_text' parameter"}), 400
+    
+    if not column or not column.strip():
+        return jsonify({"error": "Missing or empty 'column' parameter"}), 400
+    
+    # Validate skema if provided
+    if skema is not None and not isinstance(skema, str):
+        return jsonify({"error": "'skema' parameter must be a string"}), 400
+    
+    return None
+
+# Flask middleware
+@app.before_request
+def before_request():
+    """Run before each request for timing and authentication"""
+    request.start_time = time.time()
+    
+    # Skip authentication for health check
+    if request.path == '/health':
+        return None
+    
+    # # Validate API key
+    # auth_error = validate_api_key()
+    # if auth_error:
+    #     return auth_error
+
+@app.after_request
+def after_request(response):
+    """Run after each request for logging"""
+    if hasattr(request, 'start_time'):
+        elapsed_time = time.time() - request.start_time
+        logger.info(f"Request to {request.path} took {elapsed_time:.4f} seconds")
+    
+    # Add CORS headers if needed
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-KEY'
+    
+    return response
+
+# API Routes
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    enhanced_model_info = None
+    if detector.enhanced_model:
+        enhanced_model_info = detector.enhanced_model.get_model_info()
+    
+    return jsonify({
+        "status": "healthy",
+        "timestamp": time.time(),
+        "legacy_model_loaded": detector.model is not None,
+        "enhanced_model_loaded": detector.enhanced_model is not None,
+        "enhanced_model_info": enhanced_model_info,
+        "threshold_manager_loaded": detector.threshold_manager is not None,
+        "text_segmentation_loaded": detector.text_segmenter is not None,
+        "configuration": {
+            "use_enhanced_model": Config.USE_ENHANCED_MODEL,
+            "enhanced_model_name": Config.ENHANCED_MODEL_NAME,
+            "legacy_model_name": Config.MODEL_NAME,
+            "text_segmentation_enabled": Config.ENABLE_TEXT_SEGMENTATION,
+            "indonesian_preprocessing_enabled": Config.USE_INDONESIAN_PREPROCESSING,
+            "indonesian_stopword_removal": Config.INDONESIAN_STOPWORD_REMOVAL,
+            "indonesian_stemming": Config.USE_INDONESIAN_STEMMING
+        }
+    }), 200
+
+@app.route('/search', methods=['POST'])
+def search():
+    """
+    Search endpoint for plagiarism detection
+    
+    Expected JSON payload:
+    {
+        "query_text": "text to check",
+        "column": "column_name",
+        "skema": "PKM",  # optional - filter by skema
+        "top_k": 1,  # optional
+        "threshold": 0.8,  # optional
+        "enable_segmentation": true  # optional - force enable/disable segmentation
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        # Validate request
+        validation_error = validate_search_request(data)
+        if validation_error:
+            return validation_error
+        
+        # Extract parameters
+        query_text = data.get('query_text')
+        column = data.get('column')
+        skema = data.get('skema')
+        top_k = data.get('top_k', 1)
+        threshold = data.get('threshold')
+        enable_segmentation = data.get('enable_segmentation')
+        
+        # Validate top_k
+        if not isinstance(top_k, int) or top_k < 1:
+            return jsonify({"error": "top_k must be a positive integer"}), 400
+        
+        # Validate threshold if provided
+        if threshold is not None:
+            if not isinstance(threshold, (int, float)) or not (0 <= threshold <= 1):
+                return jsonify({"error": "threshold must be a number between 0 and 1"}), 400
+        
+        # Perform search with skema and segmentation support
+        result = detector.search_vector_database(query_text, column, top_k, threshold, skema, enable_segmentation)
+        
+        # Ensure result is JSON serializable
+        result = make_json_serializable(result)
+        
+        logger.info(f"Search completed - skema: {skema}, column: {column}, similarity: {result['similarity_score']}")
+        return jsonify(result), 200
+        
+    except ValueError as e:
+        logger.error(f"Validation error in search: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Unexpected error in search: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/search_bulk', methods=['POST'])
+def search_bulk():
+    """
+    Bulk search endpoint for multiple proposals
+    
+    Expected JSON payload:
+    {
+        "texts": [
+            {
+                "skema": "PKM",  # optional skema for this item
+                "column1": "text1",
+                "column2": "text2"
+            },
+            {
+                "skema": "Penelitian_Terapan",
+                "column1": "text3",
+                "column2": "text4"
+            }
+        ],
+        "threshold": 0.8  # optional global threshold
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        texts_group = data.get('texts')
+        global_threshold = data.get('threshold')
+        
+        if not texts_group or not isinstance(texts_group, list):
+            return jsonify({"error": "'texts' must be a list of dictionaries"}), 400
+        
+        if len(texts_group) == 0:
+            return jsonify({"error": "'texts' list cannot be empty"}), 400
+        
+        # Validate global threshold
+        if global_threshold is not None:
+            if not isinstance(global_threshold, (int, float)) or not (0 <= global_threshold <= 1):
+                return jsonify({"error": "threshold must be a number between 0 and 1"}), 400
+        
+        all_results = []
+        
+        for i, item in enumerate(texts_group):
+            if not isinstance(item, dict):
+                logger.warning(f"Skipping invalid item at index {i}: not a dictionary")
+                continue
+            
+            result_per_column = {}
+            similarity_scores = []
+            
+            for column, text in item.items():
+                if column == 'skema':  # Skip skema field in text processing
+                    continue
+                if not text or not str(text).strip():
+                    continue
+                
+                # Get skema for this item
+                item_skema = item.get('skema')
+                
+                try:
+                    result = detector.search_vector_database(
+                        str(text), column, top_k=1, threshold=global_threshold, skema=item_skema, enable_segmentation=True
+                    )
+                    # Ensure result is JSON serializable
+                    result = make_json_serializable(result)
+                    result_per_column[column] = result
+                    similarity_scores.append(result["similarity_score"])
+                    
+                except Exception as e:
+                    logger.error(f"Error processing column '{column}' in item {i} with skema '{item_skema}': {e}")
+                    result_per_column[column] = {"error": str(e)}
+            
+            # Calculate summary statistics
+            if similarity_scores:
+                average_score = sum(similarity_scores) / len(similarity_scores)
+                max_score = max(similarity_scores)
+                threshold_used = global_threshold or Config.DEFAULT_THRESHOLD
+                
+                result_per_column["summary"] = {
+                    "average_similarity_score": round(average_score, 4),
+                    "max_similarity_score": round(max_score, 4),
+                    "is_plagiarism": max_score >= threshold_used,
+                    "columns_processed": len(similarity_scores),
+                    "threshold_used": threshold_used
+                }
+            else:
+                result_per_column["summary"] = {
+                    "average_similarity_score": 0.0,
+                    "max_similarity_score": 0.0,
+                    "is_plagiarism": False,
+                    "columns_processed": 0,
+                    "threshold_used": global_threshold or Config.DEFAULT_THRESHOLD
+                }
+            
+            all_results.append(result_per_column)
+        
+        logger.info(f"Bulk search completed for {len(all_results)} items")
+        # Ensure all results are JSON serializable
+        serializable_results = make_json_serializable(all_results)
+        return jsonify({"results": serializable_results}), 200
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in bulk search: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/skemas', methods=['GET'])
+def get_skemas():
+    """
+    Get available skemas endpoint
+    
+    Returns list of available skemas with counts
+    """
+    try:
+        skemas = []
+        
+        if Config.ENABLE_SKEMA_FILTERING and os.path.exists(Config.SKEMA_VECTOR_DIR):
+            # Get skemas from hierarchical directory structure
+            for item in os.listdir(Config.SKEMA_VECTOR_DIR):
+                skema_path = os.path.join(Config.SKEMA_VECTOR_DIR, item)
+                if os.path.isdir(skema_path):
+                    # Count vector files in this skema directory
+                    vector_files = [f for f in os.listdir(skema_path) if f.endswith('.pkl')]
+                    skemas.append({
+                        'name': item.replace('_', ' '),
+                        'count': len(vector_files),
+                        'sections': [f.replace('vector_index_', '').replace('.pkl', '') for f in vector_files]
+                    })
+        
+        # Add legacy support info
+        legacy_available = os.path.exists(Config.VECTOR_DIR)
+        legacy_files = []
+        if legacy_available:
+            legacy_files = [f for f in os.listdir(Config.VECTOR_DIR) if f.startswith('latest_vector_index_')]
+        
+        return jsonify({
+            "skemas": skemas,
+            "total_skemas": len(skemas),
+            "skema_filtering_enabled": Config.ENABLE_SKEMA_FILTERING,
+            "legacy_support": {
+                "available": legacy_available,
+                "files": len(legacy_files)
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting skemas: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/models', methods=['GET'])
+def get_model_info():
+    """
+    Get detailed information about loaded models
+    """
+    try:
+        result = {
+            "legacy_model": {
+                "loaded": detector.model is not None,
+                "name": Config.MODEL_NAME,
+                "type": "sentence-transformers"
+            },
+            "enhanced_model": {
+                "loaded": detector.enhanced_model is not None,
+                "enabled": Config.USE_ENHANCED_MODEL
+            },
+            "threshold_manager": {
+                "loaded": detector.threshold_manager is not None,
+                "thresholds": detector.threshold_manager.get_all_thresholds() if detector.threshold_manager else None
+            }
+        }
+        
+        if detector.enhanced_model:
+            result["enhanced_model"].update(detector.enhanced_model.get_model_info())
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting model info: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/thresholds', methods=['GET', 'POST'])
+def manage_thresholds():
+    """
+    GET: Get current threshold configuration
+    POST: Update threshold for a specific column
+    
+    POST Expected JSON payload:
+    {
+        "column": "ringkasan",
+        "threshold": 0.85
+    }
+    """
+    if not detector.threshold_manager:
+        return jsonify({"error": "Enhanced threshold manager not available"}), 503
+    
+    try:
+        if request.method == 'GET':
+            return jsonify({
+                "thresholds": detector.threshold_manager.get_all_thresholds(),
+                "default_adjustments": {
+                    "length_adjustments": detector.threshold_manager.LENGTH_ADJUSTMENTS,
+                    "default_threshold": detector.threshold_manager.DEFAULT_THRESHOLDS['default']
+                }
+            }), 200
+        
+        elif request.method == 'POST':
+            data = request.get_json()
+            
+            if not data:
+                return jsonify({"error": "No JSON data provided"}), 400
+            
+            column = data.get('column')
+            threshold = data.get('threshold')
+            
+            if not column:
+                return jsonify({"error": "Missing 'column' parameter"}), 400
+            
+            if threshold is None:
+                return jsonify({"error": "Missing 'threshold' parameter"}), 400
+            
+            if not isinstance(threshold, (int, float)) or not (0 <= threshold <= 1):
+                return jsonify({"error": "threshold must be a number between 0 and 1"}), 400
+            
+            # Update threshold
+            detector.threshold_manager.update_threshold(column, threshold)
+            
+            return jsonify({
+                "message": f"Threshold for '{column}' updated to {threshold}",
+                "updated_thresholds": detector.threshold_manager.get_all_thresholds()
+            }), 200
+        
+    except Exception as e:
+        logger.error(f"Error managing thresholds: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/search_by_skema', methods=['POST'])
+def search_by_skema():
+    """
+    Search endpoint specifically designed for skema-based queries
+    
+    Expected JSON payload:
+    {
+        "query_text": "text to check",
+        "column": "ringkasan",
+        "skema": "PKM",
+        "top_k": 1,
+        "threshold": 0.8,
+        "fallback_to_legacy": true
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        query_text = data.get('query_text')
+        column = data.get('column')
+        skema = data.get('skema')
+        top_k = data.get('top_k', 1)
+        threshold = data.get('threshold')
+        fallback_to_legacy = data.get('fallback_to_legacy', True)
+        
+        # Validate required fields
+        if not query_text or not query_text.strip():
+            return jsonify({"error": "Missing or empty 'query_text' parameter"}), 400
+        
+        if not column or not column.strip():
+            return jsonify({"error": "Missing or empty 'column' parameter"}), 400
+        
+        if not skema or not skema.strip():
+            return jsonify({"error": "Missing or empty 'skema' parameter"}), 400
+        
+        # Validate parameters
+        if not isinstance(top_k, int) or top_k < 1:
+            return jsonify({"error": "top_k must be a positive integer"}), 400
+        
+        if threshold is not None:
+            if not isinstance(threshold, (int, float)) or not (0 <= threshold <= 1):
+                return jsonify({"error": "threshold must be a number between 0 and 1"}), 400
+        
+        try:
+            # Perform skema-specific search
+            result = detector.search_vector_database(query_text, column, top_k, threshold, skema)
+            
+            # Ensure result is JSON serializable
+            result = make_json_serializable(result)
+            
+            logger.info(f"Skema search completed - skema: {skema}, column: {column}, similarity: {result['similarity_score']}")
+            return jsonify(result), 200
+            
+        except (FileNotFoundError, ValueError) as e:
+            if fallback_to_legacy:
+                logger.warning(f"Skema search failed, falling back to legacy: {e}")
+                # Fallback to legacy search
+                result = detector.search_vector_database(query_text, column, top_k, threshold, None)
+                result['fallback_used'] = True
+                result['fallback_reason'] = str(e)
+                # Ensure result is JSON serializable
+                result = make_json_serializable(result)
+                return jsonify(result), 200
+            else:
+                raise e
+        
+    except ValueError as e:
+        logger.error(f"Validation error in skema search: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Unexpected error in skema search: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    """Handle 404 errors"""
+    logger.warning(f"404 error: {error}")
+    return jsonify({"error": "Endpoint not found"}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    """Handle 405 errors"""
+    logger.warning(f"405 error: {error}")
+    return jsonify({"error": "Method not allowed"}), 405
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Handle 500 errors"""
+    logger.error(f"Internal server error: {error}")
+    return jsonify({"error": "Internal server error"}), 500
+
+if __name__ == '__main__':
+    # Validate required configuration
+    if not Config.API_KEY:
+        logger.error("API_KEY environment variable is required")
+        exit(1)
+    
+    logger.info(f"Starting server on {Config.FLASK_HOST}:{Config.FLASK_PORT}")
+    logger.info(f"Debug mode: {Config.DEBUG}")
+    
+    app.run(
+        debug=Config.DEBUG,
+        host=Config.FLASK_HOST,
+        port=Config.FLASK_PORT
+    )

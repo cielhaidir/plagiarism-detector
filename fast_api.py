@@ -49,7 +49,7 @@ def search():
         column = data.get('column')
         skema_filter = data.get('skema')
         limit = data.get('top_k', 10)
-        threshold = data.get('threshold', 0.7)
+        threshold = data.get('threshold', 0.0)
         
         if not query_text:
             return jsonify({"error": "query_text is required"}), 400
@@ -91,7 +91,7 @@ def search_bulk():
         
         texts = data.get('texts', [])
         limit = data.get('top_k', 5)
-        threshold = data.get('threshold', 0.7)
+        threshold = data.get('threshold', 0.0)
         
         if not texts:
             return jsonify({"error": "texts array is required"}), 400

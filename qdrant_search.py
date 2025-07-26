@@ -102,8 +102,8 @@ class QdrantPlagiarismSearch:
         print(f"Indexed {len(points)} text segments from {len(df)} proposals")
         return len(points)
     
-    def search(self, query_text: str, column: str = None, skema_filter: str = None, 
-               limit: int = 10, threshold: float = 0.7) -> List[Dict[str, Any]]:
+    def search(self, query_text: str, column: str = None, skema_filter: str = None,
+               limit: int = 10, threshold: float = 0.0) -> List[Dict[str, Any]]:
         """Fast vector similarity search."""
         if not query_text or len(query_text.strip()) < 3:
             return []
@@ -127,13 +127,12 @@ class QdrantPlagiarismSearch:
                 ))
             search_filter = models.Filter(must=conditions)
         
-        # Search
+        # Search - removed score_threshold to show all results
         search_result = self.client.search(
             collection_name=self.collection_name,
             query_vector=query_embedding,
             query_filter=search_filter,
-            limit=limit,
-            score_threshold=threshold
+            limit=limit
         )
         
         # Format results
@@ -151,8 +150,8 @@ class QdrantPlagiarismSearch:
         
         return results
     
-    def search_bulk(self, texts: List[Dict[str, str]], limit: int = 5, 
-                    threshold: float = 0.7) -> List[List[Dict[str, Any]]]:
+    def search_bulk(self, texts: List[Dict[str, str]], limit: int = 5,
+                    threshold: float = 0.0) -> List[List[Dict[str, Any]]]:
         """Bulk search for multiple texts."""
         results = []
         
