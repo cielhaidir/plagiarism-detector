@@ -89,7 +89,8 @@ class QdrantPlagiarismSearch:
                             "skema": str(row['skema']),
                             "column": column,
                             "text": text,
-                            "original_text": text  # Keep original for display
+                            "original_text": text,  # Keep original for display
+                            "judul": str(row['judul'])  # Add judul field
                         }
                     ))
         
@@ -146,7 +147,8 @@ class QdrantPlagiarismSearch:
                 "column": payload["column"],
                 "text": payload["text"] + "..." if len(payload["text"]) > 500 else payload["text"],
                 "similarity_score": float(hit.score),
-                "matched_text": payload["original_text"]
+                "matched_text": payload["original_text"],
+                "judul": payload.get("judul", "")  # Add judul field
             })
         
         return results
