@@ -7,9 +7,9 @@ app = Flask(__name__)
 
 # Global Qdrant search instance
 qdrant_search = None
-initialization_complete = False
+initialization_complete = True
 
-def initialize_qdrant():
+def initialize_qdrant(force_reinit=False):
     """Initialize Qdrant search in background."""
     global qdrant_search, initialization_complete
     try:
@@ -23,8 +23,10 @@ def initialize_qdrant():
         else:
             print("Using in-memory Qdrant (localhost)")
             
-        qdrant_search = get_qdrant_search(host=host, port=port)
-        qdrant_search.initialize_collection()
+        qdrant_search = get_qdrant_search(host=host, port=port, force_reinit=force_reinit)
+        if force_reinit or not hasattr(qdrant_search, '_collection_initialized'):
+            qdrant_search.initialize_collection()
+            qdrant_search._collection_initialized = True
         initialization_complete = True
         print("Qdrant search initialized successfully!")
     except Exception as e:
@@ -147,13 +149,42 @@ def stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/refresh', methods=['GET'])
+def refresh():
+    """Force refresh/reinitialize the Qdrant collection."""
+    global qdrant_search, initialization_complete
+    
+    try:
+        initialization_complete = False
+        print("Manual refresh triggered - reinitializing Qdrant collection...")
+        
+        # Start reinitialization in background thread
+        def refresh_worker():
+            initialize_qdrant(force_reinit=True)
+        
+        refresh_thread = threading.Thread(target=refresh_worker)
+        refresh_thread.daemon = True
+        refresh_thread.start()
+        
+        return jsonify({
+            "message": "Qdrant collection refresh initiated",
+            "status": "refreshing"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print("Starting fast plagiarism detection API with Qdrant...")
     
-    # Start Qdrant initialization in background
-    init_thread = threading.Thread(target=initialize_qdrant)
-    init_thread.daemon = True
-    init_thread.start()
+    # Only initialize once at startup
+    print("Connecting to Qdrant (without initializing collection)...")
+    import os
+    host = os.getenv('QDRANT_HOST')
+    port = int(os.getenv('QDRANT_PORT', 6333))
+    qdrant_search = get_qdrant_search(host=host, port=port)
+    initialization_complete = True
+    print("Qdrant connection established. Use /refresh to initialize collection data.")
     
-    print("API server starting (Qdrant initialization in background)...")
+    print("API server starting...")
     app.run(debug=True, host='0.0.0.0', port=5001)

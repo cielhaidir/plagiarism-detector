@@ -10,6 +10,7 @@ import re
 import joblib
 from typing import List, Dict, Any
 import os
+import difflib
 
 class QdrantPlagiarismSearch:
     def __init__(self, collection_name="indonesian_proposals", host=None, port=None):
@@ -51,10 +52,59 @@ class QdrantPlagiarismSearch:
         text = self.stopword_remover.remove(text)
         text = self.stemmer.stem(text)
         return text
-    
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Create sentence embeddings for texts."""
         return self.model.encode(texts).tolist()
+    
+    def _highlight_similarities(self, query_text: str, matched_text: str) -> str:
+        """Highlight similar words/phrases between query and matched text with brackets."""
+        if not query_text or not matched_text:
+            return matched_text
+        
+        # Preprocess both texts to normalize for comparison
+        query_processed = self.preprocess_text(query_text)
+        matched_processed = self.preprocess_text(matched_text)
+        
+        # Split into words
+        query_words = query_processed.split()
+        matched_words = matched_processed.split()
+        original_words = matched_text.split()
+        
+        if not query_words or not matched_words:
+            return matched_text
+        
+        # Use SequenceMatcher to find matching blocks
+        matcher = difflib.SequenceMatcher(None, query_words, matched_words)
+        matching_blocks = matcher.get_matching_blocks()
+        
+        # Create a set of indices that should be highlighted in the matched text
+        highlight_indices = set()
+        for match in matching_blocks:
+            # match.b is the start index in matched_words, match.size is the length
+            if match.size > 0:  # Only consider non-empty matches
+                for i in range(match.b, match.b + match.size):
+                    highlight_indices.add(i)
+        
+        # Build the highlighted text
+        result_words = []
+        i = 0
+        while i < len(original_words):
+            if i in highlight_indices:
+                # Start of a highlighted section
+                start_idx = i
+                # Find the end of consecutive highlighted words
+                while i < len(original_words) and i in highlight_indices:
+                    i += 1
+                # Add the highlighted section
+                highlighted_section = " ".join(original_words[start_idx:i])
+                result_words.append(f"[{highlighted_section}]")
+            else:
+                # Regular word, not highlighted
+                result_words.append(original_words[i])
+                i += 1
+        
+        return " ".join(result_words)
+    
     
     def initialize_collection(self, csv_path: str = "skripsi_with_skema.csv"):
         """Initialize Qdrant collection with proposal data."""
@@ -141,13 +191,21 @@ class QdrantPlagiarismSearch:
         results = []
         for hit in search_result:
             payload = hit.payload
+            original_text = payload["original_text"]
+            
+            if float(hit.score) >= 0.7:
+                highlighted_text = self._highlight_similarities(query_text, original_text)
+            else:
+                highlighted_text = original_text  # atau kosong, tergantung kebutuhan
+                
             results.append({
                 "id": payload["proposal_id"],
                 "skema": payload["skema"],
                 "column": payload["column"],
                 "text": payload["text"] + "..." if len(payload["text"]) > 500 else payload["text"],
                 "similarity_score": float(hit.score),
-                "matched_text": payload["original_text"],
+                "matched_text": highlighted_text,  # Use highlighted text
+                "original_highlighted": highlighted_text,  # Add original_highlighted field for frontend
                 "judul": payload.get("judul", "")  # Add judul field
             })
         
@@ -185,6 +243,14 @@ class QdrantPlagiarismSearch:
         
         return results
     
+    def collection_exists(self) -> bool:
+        """Check if the collection exists and has data."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            return info.points_count > 0
+        except Exception:
+            return False
+    
     def get_stats(self) -> Dict[str, Any]:
         """Get collection statistics."""
         info = self.client.get_collection(self.collection_name)
@@ -198,15 +264,16 @@ class QdrantPlagiarismSearch:
 # Global instance
 _qdrant_search = None
 
-def get_qdrant_search(host=None, port=None):
+def get_qdrant_search(host=None, port=None, force_reinit=False):
     """Get or create global Qdrant search instance.
     
     Args:
         host: Qdrant server host (default: None for in-memory)
         port: Qdrant server port (default: 6333)
+        force_reinit: Force recreation of the instance (default: False)
     """
     global _qdrant_search
-    if _qdrant_search is None:
+    if _qdrant_search is None or force_reinit:
         # Check environment variables
         import os
         env_host = os.getenv('QDRANT_HOST', host)
