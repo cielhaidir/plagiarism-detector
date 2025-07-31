@@ -49,8 +49,8 @@ class QdrantPlagiarismSearch:
         text = re.sub(r'\d+', '', text)
         text = re.sub(r'[^\w\s]', '', text)
         text = text.strip()
-        text = self.stopword_remover.remove(text)
-        text = self.stemmer.stem(text)
+        # text = self.stopword_remover.remove(text)
+        # text = self.stemmer.stem(text)
         return text
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Create sentence embeddings for texts."""
