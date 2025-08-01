@@ -237,6 +237,7 @@ class QdrantPlagiarismSearch:
             
             results.append({
                 "query_index": i,
+                "proposal_id": text_item.get('proposal_id'),
                 "results": item_results,
                 "total_results": len(item_results)
             })

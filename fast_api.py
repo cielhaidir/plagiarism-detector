@@ -158,6 +158,7 @@ def search_bulk():
         threshold = data.get('threshold', 0.7)
         webhook_url = data.get('webhook_url')
         
+        print(f"Webhook URL: {webhook_url}")
         if not texts:
             return jsonify({"error": "texts array is required"}), 400
         
@@ -173,11 +174,43 @@ def search_bulk():
                         threshold=threshold
                     )
                     
+                    # # Transform results to match frontend expectations
+                    # transformed_results = []
+                    # for bulk_item in results:
+                    #     query_index = bulk_item["query_index"]
+                    #     item_results = bulk_item["results"]
+                        
+                    #     # For each query, create entries for each matching proposal
+                    #     for result in item_results:
+                    #         transformed_results.append({
+                    #             "query_index": query_index,
+                    #             "proposal_id": result["id"],
+                    #             "results": {
+                    #                 "similarity_score": result["similarity_score"],
+                    #                 "column": result["column"],
+                    #                 "skema": result["skema"],
+                    #                 "matched_text": result.get("matched_text", result.get("text", "")),
+                    #                 "judul": result.get("judul", ""),
+                    #                 "original_highlighted": result.get("original_highlighted", result.get("matched_text", result.get("text", "")))
+                    #             }
+                    #         })
+                    
+                    # Add proposal_id to each bulk result item from input parameters
+                    enhanced_results = []
+                    for i, result_item in enumerate(results):
+                        enhanced_item = result_item.copy()
+                        # Get proposal_id from original input text item
+                        if i < len(texts):
+                            enhanced_item["proposal_id"] = texts[i].get('proposal_id')
+                        else:
+                            enhanced_item["proposal_id"] = None
+                        enhanced_results.append(enhanced_item)
+                    
                     webhook_payload = {
                         "job_id": job_id,
                         "status": "completed",
                         "timestamp": datetime.now().isoformat(),
-                        "bulk_results": results,
+                        "bulk_results": enhanced_results,
                         "total_queries": len(texts)
                     }
                     

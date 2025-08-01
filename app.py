@@ -260,6 +260,7 @@ def search_bulk():
                         print(f"[BULK]   - Finished query {i+1}, found {len(item_results)} results")
                         bulk_results.append({
                             "query_index": i,
+                            "proposal_id": text_item.get('proposal_id'),
                             "results": item_results,
                             "query_info": {
                                 "skema_filter": skema_filter,
