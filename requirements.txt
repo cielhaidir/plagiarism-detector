@@ -10,3 +10,4 @@ python-Levenshtein
 gensim
 sentence-transformers
 qdrant-client
+requests

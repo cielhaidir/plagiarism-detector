@@ -2,6 +2,9 @@ from flask import Flask, request, jsonify
 from qdrant_search import get_qdrant_search
 import threading
 import time
+import requests
+import uuid
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -35,7 +38,7 @@ def initialize_qdrant(force_reinit=False):
 
 @app.route('/search', methods=['POST'])
 def search():
-    """Fast vector similarity search."""
+    """Fast vector similarity search with webhook support."""
     if not initialization_complete:
         return jsonify({"error": "System is still initializing, please wait..."}), 503
     
@@ -52,34 +55,93 @@ def search():
         skema_filter = data.get('skema')
         limit = data.get('top_k', 10)
         threshold = data.get('threshold', 0.7)
+        webhook_url = data.get('webhook_url')
         
         if not query_text:
             return jsonify({"error": "query_text is required"}), 400
         
-        results = qdrant_search.search(
-            query_text=query_text,
-            column=column,
-            skema_filter=skema_filter,
-            limit=limit,
-            threshold=threshold
-        )
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_search():
+                try:
+                    results = qdrant_search.search(
+                        query_text=query_text,
+                        column=column,
+                        skema_filter=skema_filter,
+                        limit=limit,
+                        threshold=threshold
+                    )
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "results": results,
+                        "query_info": {
+                            "column": column,
+                            "skema_filter": skema_filter,
+                            "total_results": len(results),
+                            "threshold": threshold
+                        }
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Search results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Search failed for job {job_id}: {e}")
+            
+            # Start async processing
+            search_thread = threading.Thread(target=async_search)
+            search_thread.daemon = True
+            search_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Search started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url
+            }), 202
         
-        return jsonify({
-            "results": results,
-            "query_info": {
-                "column": column,
-                "skema_filter": skema_filter,
-                "total_results": len(results),
-                "threshold": threshold
-            }
-        })
+        # Synchronous processing (original behavior)
+        else:
+            results = qdrant_search.search(
+                query_text=query_text,
+                column=column,
+                skema_filter=skema_filter,
+                limit=limit,
+                threshold=threshold
+            )
+            
+            return jsonify({
+                "results": results,
+                "query_info": {
+                    "column": column,
+                    "skema_filter": skema_filter,
+                    "total_results": len(results),
+                    "threshold": threshold
+                }
+            })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/search_bulk', methods=['POST'])
 def search_bulk():
-    """Fast bulk search."""
+    """Fast bulk search with webhook support."""
     if not initialization_complete:
         return jsonify({"error": "System is still initializing, please wait..."}), 503
     
@@ -94,20 +156,72 @@ def search_bulk():
         texts = data.get('texts', [])
         limit = data.get('top_k', 5)
         threshold = data.get('threshold', 0.7)
+        webhook_url = data.get('webhook_url')
         
         if not texts:
             return jsonify({"error": "texts array is required"}), 400
         
-        results = qdrant_search.search_bulk(
-            texts=texts,
-            limit=limit,
-            threshold=threshold
-        )
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_bulk_search():
+                try:
+                    results = qdrant_search.search_bulk(
+                        texts=texts,
+                        limit=limit,
+                        threshold=threshold
+                    )
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "bulk_results": results,
+                        "total_queries": len(texts)
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Bulk search results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Bulk search failed for job {job_id}: {e}")
+            
+            # Start async processing
+            search_thread = threading.Thread(target=async_bulk_search)
+            search_thread.daemon = True
+            search_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Bulk search started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url
+            }), 202
         
-        return jsonify({
-            "bulk_results": results,
-            "total_queries": len(texts)
-        })
+        # Synchronous processing (original behavior)
+        else:
+            results = qdrant_search.search_bulk(
+                texts=texts,
+                limit=limit,
+                threshold=threshold
+            )
+            
+            return jsonify({
+                "bulk_results": results,
+                "total_queries": len(texts)
+            })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -7,6 +7,10 @@ import re
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 import os
+import threading
+import requests
+import uuid
+from datetime import datetime
 from similarity_utils import (
     jaccard_similarity,
     levenshtein_similarity,
@@ -118,10 +122,13 @@ def search():
         data = request.get_json()
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
+        
         query_text = data.get('query_text')
         column = data.get('column')
         skema_filter = data.get('skema')
         top_k = data.get('top_k', 10)
+        webhook_url = data.get('webhook_url')
+        
         if not query_text:
             return jsonify({"error": "query_text is required"}), 400
         if not column:
@@ -129,15 +136,68 @@ def search():
         if column not in indices:
             valid_columns = list(indices.keys())
             return jsonify({"error": f"Invalid column. Valid columns are: {valid_columns}"}), 400
-        results = search_column(query_text, column, skema_filter, top_k)
-        return jsonify({
-            "results": results,
-            "query_info": {
-                "column": column,
-                "skema_filter": skema_filter,
-                "total_results": len(results)
-            }
-        })
+        
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_search():
+                try:
+                    results = search_column(query_text, column, skema_filter, top_k)
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "results": results,
+                        "query_info": {
+                            "column": column,
+                            "skema_filter": skema_filter,
+                            "total_results": len(results)
+                        }
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Search results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Search failed for job {job_id}: {e}")
+            
+            # Start async processing
+            search_thread = threading.Thread(target=async_search)
+            search_thread.daemon = True
+            search_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Search started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url
+            }), 202
+        
+        # Synchronous processing (original behavior)
+        else:
+            results = search_column(query_text, column, skema_filter, top_k)
+            return jsonify({
+                "results": results,
+                "query_info": {
+                    "column": column,
+                    "skema_filter": skema_filter,
+                    "total_results": len(results)
+                }
+            })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -147,60 +207,158 @@ def search_bulk():
         data = request.get_json()
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
+        
         texts = data.get('texts', [])
         top_k = data.get('top_k', 1)
+        webhook_url = data.get('webhook_url')
+        
         if not texts:
             return jsonify({"error": "texts array is required"}), 400
-        bulk_results = []
-        for i, text_item in enumerate(texts):
-            print(f"[BULK] Processing query {i+1}/{len(texts)}")
-            # Handle case where text_item is a list containing a dict
-            if isinstance(text_item, list):
-                if len(text_item) > 0 and isinstance(text_item[0], dict):
-                    text_item = text_item[0]  # Extract the dict from the list
-                else:
+        
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_bulk_search():
+                try:
+                    bulk_results = []
+                    for i, text_item in enumerate(texts):
+                        print(f"[BULK] Processing query {i+1}/{len(texts)}")
+                        # Handle case where text_item is a list containing a dict
+                        if isinstance(text_item, list):
+                            if len(text_item) > 0 and isinstance(text_item[0], dict):
+                                text_item = text_item[0]  # Extract the dict from the list
+                            else:
+                                bulk_results.append({
+                                    "query_index": i,
+                                    "error": f"Invalid list format: {text_item}"
+                                })
+                                continue
+                        
+                        # Check if it's a dictionary
+                        if not isinstance(text_item, dict):
+                            bulk_results.append({
+                                "query_index": i,
+                                "error": f"Expected dict but got {type(text_item).__name__}: {text_item}"
+                            })
+                            continue
+                            
+                        skema_filter = text_item.get('skema')
+                        item_results = []
+                        # Loop through all possible columns
+                        for column in indices.keys():
+                            query_text = text_item.get(column)
+                            if query_text:
+                                print(f"[BULK]   - Searching column '{column}' for query {i+1}")
+                                results = search_column(query_text, column, skema_filter, top_k)
+                                for result in results:
+                                    result['searched_column'] = column
+                                item_results.extend(results)
+                        # Sort and limit results
+                        item_results.sort(key=lambda x: x['final_score'], reverse=True)
+                        item_results = item_results[:top_k]
+                        print(f"[BULK]   - Finished query {i+1}, found {len(item_results)} results")
+                        bulk_results.append({
+                            "query_index": i,
+                            "results": item_results,
+                            "query_info": {
+                                "skema_filter": skema_filter,
+                                "columns_searched": [col for col in indices.keys() if text_item.get(col)],
+                                "total_results": len(item_results)
+                            }
+                        })
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "bulk_results": bulk_results,
+                        "total_queries": len(texts)
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Bulk search results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Bulk search failed for job {job_id}: {e}")
+            
+            # Start async processing
+            search_thread = threading.Thread(target=async_bulk_search)
+            search_thread.daemon = True
+            search_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Bulk search started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url
+            }), 202
+        
+        # Synchronous processing (original behavior)
+        else:
+            bulk_results = []
+            for i, text_item in enumerate(texts):
+                print(f"[BULK] Processing query {i+1}/{len(texts)}")
+                # Handle case where text_item is a list containing a dict
+                if isinstance(text_item, list):
+                    if len(text_item) > 0 and isinstance(text_item[0], dict):
+                        text_item = text_item[0]  # Extract the dict from the list
+                    else:
+                        bulk_results.append({
+                            "query_index": i,
+                            "error": f"Invalid list format: {text_item}"
+                        })
+                        continue
+                
+                # Check if it's a dictionary
+                if not isinstance(text_item, dict):
                     bulk_results.append({
                         "query_index": i,
-                        "error": f"Invalid list format: {text_item}"
+                        "error": f"Expected dict but got {type(text_item).__name__}: {text_item}"
                     })
                     continue
-            
-            # Check if it's a dictionary
-            if not isinstance(text_item, dict):
+                    
+                skema_filter = text_item.get('skema')
+                item_results = []
+                # Loop through all possible columns
+                for column in indices.keys():
+                    query_text = text_item.get(column)
+                    if query_text:
+                        print(f"[BULK]   - Searching column '{column}' for query {i+1}")
+                        results = search_column(query_text, column, skema_filter, top_k)
+                        for result in results:
+                            result['searched_column'] = column
+                        item_results.extend(results)
+                # Sort and limit results
+                item_results.sort(key=lambda x: x['final_score'], reverse=True)
+                item_results = item_results[:top_k]
+                print(f"[BULK]   - Finished query {i+1}, found {len(item_results)} results")
                 bulk_results.append({
                     "query_index": i,
-                    "error": f"Expected dict but got {type(text_item).__name__}: {text_item}"
+                    "results": item_results,
+                    "query_info": {
+                        "skema_filter": skema_filter,
+                        "columns_searched": [col for col in indices.keys() if text_item.get(col)],
+                        "total_results": len(item_results)
+                    }
                 })
-                continue
-                
-            skema_filter = text_item.get('skema')
-            item_results = []
-            # Loop through all possible columns
-            for column in indices.keys():
-                query_text = text_item.get(column)
-                if query_text:
-                    print(f"[BULK]   - Searching column '{column}' for query {i+1}")
-                    results = search_column(query_text, column, skema_filter, top_k)
-                    for result in results:
-                        result['searched_column'] = column
-                    item_results.extend(results)
-            # Sort and limit results
-            item_results.sort(key=lambda x: x['final_score'], reverse=True)
-            item_results = item_results[:top_k]
-            print(f"[BULK]   - Finished query {i+1}, found {len(item_results)} results")
-            bulk_results.append({
-                "query_index": i,
-                "results": item_results,
-                "query_info": {
-                    "skema_filter": skema_filter,
-                    "columns_searched": [col for col in indices.keys() if text_item.get(col)],
-                    "total_results": len(item_results)
-                }
+            
+            return jsonify({
+                "bulk_results": bulk_results,
+                "total_queries": len(texts)
             })
-        return jsonify({
-            "bulk_results": bulk_results,
-            "total_queries": len(texts)
-        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
