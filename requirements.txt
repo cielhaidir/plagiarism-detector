@@ -3,7 +3,8 @@ scikit-learn
 nltk
 Flask
 Sastrawi
-numpy>=2.0.0
+numpy<2.0.0
+scikit-learn==1.6.1
 joblib
 tqdm
 python-Levenshtein
@@ -11,3 +12,4 @@ gensim
 sentence-transformers
 qdrant-client
 requests
+gunicorn

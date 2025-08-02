@@ -1,4 +1,5 @@
 import re
+import torch
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from Levenshtein import ratio as levenshtein_ratio
@@ -8,20 +9,72 @@ import numpy as np
 # Load a multilingual model suitable for Indonesian
 _sentence_model = None
 
-def initialize_sentence_model():
-    """Pre-load the sentence transformer model at startup."""
+def get_optimal_device():
+    """Determine the best available device, with careful MPS testing for Intel Macs with AMD GPUs."""
+    
+    # First check CUDA (unlikely on Mac but check anyway)
+    if torch.cuda.is_available():
+        print("CUDA GPU detected, using CUDA")
+        return 'cuda'
+    
+    # For Intel Macs with AMD GPUs, try MPS carefully
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        try:
+            print("Testing MPS (Metal Performance Shaders) compatibility...")
+            
+            # Test with a small tensor first
+            test_tensor = torch.tensor([1.0, 2.0, 3.0], device='mps')
+            result = test_tensor * 2
+            cpu_result = result.cpu()
+            
+            # Test sentence transformer compatibility
+            print("Testing sentence transformer with MPS...")
+            test_model = SentenceTransformer('all-MiniLM-L6-v2', device='mps')
+            test_embedding = test_model.encode(["test sentence"], show_progress_bar=False)
+            
+            print("MPS compatibility test passed! Using AMD Radeon Pro 5500M via MPS")
+            return 'mps'
+            
+        except Exception as e:
+            print(f"MPS test failed ({str(e)[:100]}...), falling back to CPU")
+            print("This is common on Intel Macs with dual GPUs due to driver limitations")
+            return 'cpu'
+    else:
+        print("MPS not available, using CPU")
+        return 'cpu'
+
+def initialize_sentence_model(force_cpu=False):
+    """Pre-load the sentence transformer model at startup with proper device handling."""
     global _sentence_model
     if _sentence_model is None:
         print("Loading sentence transformer model (this may take a moment)...")
-        _sentence_model = SentenceTransformer('distiluse-base-multilingual-cased-v2')
-        print("Sentence transformer model loaded successfully!")
+        
+        # Get optimal device for this system, but allow forcing CPU for worker processes
+        device = 'cpu' if force_cpu else get_optimal_device()
+        
+        try:
+            # Initialize with explicit device and disable progress bars
+            _sentence_model = SentenceTransformer('distiluse-base-multilingual-cased-v2', device=device)
+            # Disable progress bars for encoding
+            _sentence_model.encode_kwargs = {'show_progress_bar': False}
+            print(f"Sentence transformer model loaded successfully on {device}!")
+        except Exception as e:
+            print(f"Failed to load model on {device}, falling back to CPU: {e}")
+            try:
+                _sentence_model = SentenceTransformer('distiluse-base-multilingual-cased-v2', device='cpu')
+                _sentence_model.encode_kwargs = {'show_progress_bar': False}
+                print("Sentence transformer model loaded successfully on CPU!")
+            except Exception as cpu_error:
+                print(f"Failed to load model even on CPU: {cpu_error}")
+                raise cpu_error
     return _sentence_model
 
 def get_sentence_model():
     global _sentence_model
     if _sentence_model is None:
         # Fallback - should not happen if initialized properly
-        _sentence_model = SentenceTransformer('distiluse-base-multilingual-cased-v2')
+        print("Sentence model not initialized, initializing now...")
+        return initialize_sentence_model()
     return _sentence_model
 
 def ngrams(text, n=3):
@@ -55,7 +108,7 @@ def tfidf_cosine_similarity(text1, text2, vectorizer=None):
 def sentence_embedding_similarity(text1, text2):
     """Cosine similarity between sentence embeddings."""
     model = get_sentence_model()
-    emb = model.encode([text1, text2])
+    emb = model.encode([text1, text2], show_progress_bar=False)
     sim = np.dot(emb[0], emb[1]) / (np.linalg.norm(emb[0]) * np.linalg.norm(emb[1]))
     return float(sim)
 
