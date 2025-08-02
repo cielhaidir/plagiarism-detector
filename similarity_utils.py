@@ -118,21 +118,21 @@ def calculate_final_score(exact, fuzzy, semantic, text1="", text2=""):
     The weights for exact, fuzzy, and semantic scores are adjusted based on
     the length of the texts being compared.
     """
-    len1 = len(text1)
-    len2 = len(text2)
-
-    # Shorter texts rely more on semantic and fuzzy similarity
-    if len1 < 100 or len2 < 100:
-        weights = (0.2, 0.4, 0.4)  # Boost fuzzy and semantic
-    # Medium texts have a balanced approach
-    elif 100 <= len1 < 500 or 100 <= len2 < 500:
-        weights = (0.3, 0.3, 0.4)  # Standard balanced weights
-    # Longer texts can rely more on exact (n-gram) similarity
+   
+    avg_len = (len(text1) + len(text2)) / 2
+    
+    if avg_len < 50:
+            weights = (0.1, 0.3, 0.6)  # Very short: prioritize semantic
+    elif avg_len < 200:
+        weights = (0.2, 0.4, 0.4)
+    elif avg_len < 1000:
+        weights = (0.3, 0.3, 0.4)
     else:
-        weights = (0.5, 0.2, 0.3)  # Boost exact match for long texts
+        weights = (0.5, 0.2, 0.3)
 
     # Calculate the weighted score
     final_score = (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
+    
     
     # Add a bonus for high semantic similarity, as it's a strong indicator
     if semantic > 0.9:
