@@ -112,7 +112,7 @@ def sentence_embedding_similarity(text1, text2):
     sim = np.dot(emb[0], emb[1]) / (np.linalg.norm(emb[0]) * np.linalg.norm(emb[1]))
     return float(sim)
 
-def calculate_final_score(exact, fuzzy, semantic, text1="", text2=""):
+def calculate_final_score(exact, fuzzy, semantic, text1="", text2="",  tfidf_score=None):
     """
     Calculates a final similarity score using an adaptive weighted algorithm.
     The weights for exact, fuzzy, and semantic scores are adjusted based on

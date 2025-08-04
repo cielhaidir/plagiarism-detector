@@ -321,11 +321,15 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
         if proposal_id in original_texts.index and column in original_texts.columns:
             matched_text = str(original_texts.loc[proposal_id, column]) if pd.notna(original_texts.loc[proposal_id, column]) else ""
 
+        
         # Calculate advanced similarity metrics
-        exact_score = jaccard_similarity(query_text, matched_text)
-        fuzzy_score = levenshtein_similarity(query_text, matched_text)
-        semantic_score = sentence_embedding_similarity(query_text, matched_text)
-        final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score, query_text, matched_text)
+        exact_score = jaccard_similarity(processed_query, matched_text)
+        fuzzy_score = levenshtein_similarity(processed_query, matched_text)
+        semantic_score = sentence_embedding_similarity(processed_query, matched_text)
+        final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score, processed_query, matched_text)
+
+        # Get judul from metadata
+        proposal_judul = metadata.iloc[idx].get('judul', '') if 'judul' in metadata.columns else ''
 
         results.append({
             'id': int(proposal_id),
@@ -336,7 +340,8 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
             'semantic_score': float(semantic_score),
             'final_score': float(final_score),
             'column': column,
-            'matched_text': matched_text[:500] + "..." if len(matched_text) > 500 else matched_text  # Truncate for API response
+            'matched_text': matched_text, # Truncate for API response
+            'judul': str(proposal_judul)  # Add judul field
         })
         if len(results) >= top_k:
             break
@@ -483,6 +488,7 @@ def search_bulk():
                         "timestamp": datetime.now().isoformat(),
                         "bulk_results": bulk_results,
                         "total_queries": len(texts),
+                        "api_version" : 'v2',
                         "processing_method": "parallel" if use_parallel else "sequential"
                     }
                     

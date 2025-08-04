@@ -91,5 +91,3 @@ def create_indices(file_path):
 if __name__ == '__main__':
     create_indices('skripsi_with_skema.csv')
     
-def calculate_final_score(exact, fuzzy, semantic, weights=(0.4, 0.3, 0.3)):
-    return (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
