@@ -70,12 +70,17 @@ def create_indices(file_path):
         print(f"Applying text preprocessing to '{column}'...")
         processed_texts = df[column].fillna('').progress_apply(lambda x: preprocess_text(x, stemmer, stopword_remover))
         
-        # 2. Vectorize the processed text
+        # 2. Save the preprocessed texts to CSV for faster search operations
+        processed_output_path = os.path.join(output_dir, f'processed_{column}.csv')
+        processed_texts.to_csv(processed_output_path, index=False, header=False)
+        print(f"Saved preprocessed texts to {processed_output_path}")
+        
+        # 3. Vectorize the processed text
         print(f"Vectorizing '{column}' with TF-IDF...")
         vectorizer = TfidfVectorizer()
         tfidf_matrix = vectorizer.fit_transform(processed_texts)
         
-        # 3. Save the vectorizer and the matrix
+        # 4. Save the vectorizer and the matrix
         vectorizer_path = os.path.join(output_dir, f'vectorizer_{column}.pkl')
         matrix_path = os.path.join(output_dir, f'tfidf_matrix_{column}.pkl')
         
@@ -85,6 +90,7 @@ def create_indices(file_path):
         print(f"Successfully saved index for '{column}'")
         print(f"  - Vectorizer: {vectorizer_path}")
         print(f"  - Matrix: {matrix_path}")
+        print(f"  - Preprocessed texts: {processed_output_path}")
 
     print("\n--- All columns have been processed and indexed. ---")
 

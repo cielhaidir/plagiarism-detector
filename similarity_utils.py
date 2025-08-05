@@ -5,6 +5,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from Levenshtein import ratio as levenshtein_ratio
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import difflib
 
 # Load a multilingual model suitable for Indonesian
 _sentence_model = None
@@ -112,35 +113,122 @@ def sentence_embedding_similarity(text1, text2):
     sim = np.dot(emb[0], emb[1]) / (np.linalg.norm(emb[0]) * np.linalg.norm(emb[1]))
     return float(sim)
 
-def calculate_final_score(exact, fuzzy, semantic, text1="", text2="",  tfidf_score=None):
-    """
-    Calculates a final similarity score using an adaptive weighted algorithm.
-    The weights for exact, fuzzy, and semantic scores are adjusted based on
-    the length of the texts being compared.
-    """
-   
+def calculate_final_score(similarity, semantic, exact, fuzzy, text1, text2):
     avg_len = (len(text1) + len(text2)) / 2
-    
-    if avg_len < 50:
-            weights = (0.1, 0.3, 0.6)  # Very short: prioritize semantic
-    elif avg_len < 200:
-        weights = (0.2, 0.4, 0.4)
-    elif avg_len < 1000:
-        weights = (0.3, 0.3, 0.4)
-    else:
-        weights = (0.5, 0.2, 0.3)
+    weights = (0.5, 0.45, 0.025, 0.025)
 
-    # Calculate the weighted score
-    final_score = (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
-    
-    
-    # Add a bonus for high semantic similarity, as it's a strong indicator
+    score = (
+        weights[0] * similarity +
+        weights[1] * semantic +
+        weights[2] * exact +
+        weights[3] * fuzzy
+    )
+
+    # Penalti kalau literal match rendah
+    if (exact + fuzzy) < 0.5:
+        score *= 0.4
+
+    # Penalti jika TF-IDF tinggi tapi semantic rendah
+    if similarity > 0.5 and semantic < 0.6:
+        score *= 0.8
+
+    # Bonus mini jika semantic sangat tinggi
     if semantic > 0.9:
-        final_score += 0.05
-        
-    # Add a small bonus for high fuzzy similarity
-    if fuzzy > 0.9:
-        final_score += 0.03
+        score += 0.03
 
-    # Ensure the score does not exceed 1.0
-    return min(final_score, 1.0)
+    return min(score, 1.0)
+
+def simple_preprocess_text(text: str) -> str:
+    """Simple preprocessing for highlighting - similar to qdrant_search.py"""
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\d+', '', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    text = text.strip()
+    # Note: Not applying stemming/stopword removal for highlighting
+    # to preserve original word structure for better visual matching
+    return text
+
+def highlight_similarities(query_text: str, matched_text: str) -> str:
+    """Highlight similar words/phrases between query and matched text with brackets."""
+    if not query_text or not matched_text:
+        return matched_text
+    
+    # Preprocess both texts to normalize for comparison
+    query_processed = simple_preprocess_text(query_text)
+    matched_processed = simple_preprocess_text(matched_text)
+    
+    # Split into words
+    query_words = query_processed.split()
+    matched_words = matched_processed.split()
+    original_words = matched_text.split()
+    
+    if not query_words or not matched_words:
+        return matched_text
+    
+    # Use SequenceMatcher to find matching blocks
+    matcher = difflib.SequenceMatcher(None, query_words, matched_words)
+    matching_blocks = matcher.get_matching_blocks()
+    
+    # Create a set of indices that should be highlighted in the matched text
+    highlight_indices = set()
+    for match in matching_blocks:
+        # match.b is the start index in matched_words, match.size is the length
+        if match.size > 0:  # Only consider non-empty matches
+            for i in range(match.b, match.b + match.size):
+                highlight_indices.add(i)
+    
+    # Build the highlighted text
+    result_words = []
+    i = 0
+    while i < len(original_words):
+        if i in highlight_indices:
+            # Start of a highlighted section
+            start_idx = i
+            # Find the end of consecutive highlighted words
+            while i < len(original_words) and i in highlight_indices:
+                i += 1
+            # Add the highlighted section
+            highlighted_section = " ".join(original_words[start_idx:i])
+            result_words.append(f"[{highlighted_section}]")
+        else:
+            # Regular word, not highlighted
+            result_words.append(original_words[i])
+            i += 1
+    
+    return " ".join(result_words)
+
+# def calculate_final_score(exact, fuzzy, semantic, text1="", text2="",  tfidf_score=None):
+#     """
+#     Calculates a final similarity score using an adaptive weighted algorithm.
+#     The weights for exact, fuzzy, and semantic scores are adjusted based on
+#     the length of the texts being compared.
+#     """
+   
+#     avg_len = (len(text1) + len(text2)) / 2
+    
+#     if avg_len < 50:
+#         weights = (0.1, 0.2, 0.7)  # Teks pendek, utamakan semantic
+#     elif avg_len < 200:
+#         weights = (0.15, 0.25, 0.6)
+#     elif avg_len < 1000:
+#         weights = (0.3, 0.2, 0.6)
+#     else:
+#         weights = (0.25, 0.25, 0.6)  # Teks panjang, exact bisa diperkuat sedikit
+
+#     # Calculate the weighted score
+#     final_score = (weights[0] * exact) + (weights[1] * fuzzy) + (weights[2] * semantic)
+    
+    
+#     # Add a bonus for high semantic similarity, as it's a strong indicator
+#     if semantic > 0.9:
+#         final_score += 0.05
+        
+#     # Add a small bonus for high fuzzy similarity
+#     if fuzzy > 0.9:
+#         final_score += 0.03
+
+#     # Ensure the score does not exceed 1.0
+#     return min(final_score, 1.0)

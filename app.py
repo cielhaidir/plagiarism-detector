@@ -31,7 +31,8 @@ from similarity_utils import (
     tfidf_cosine_similarity,
     sentence_embedding_similarity,
     calculate_final_score,
-    initialize_sentence_model
+    initialize_sentence_model,
+    highlight_similarities
 )
 from performance_monitor import performance_monitor, PerformanceTracker, log_search_metrics, log_bulk_metrics
 
@@ -44,6 +45,8 @@ stemmer = None
 stopword_remover = None
 # Load original proposal texts for matched_text retrieval
 original_texts = None
+# Cache for preprocessed texts to avoid reprocessing during search
+processed_texts_cache = {}
 
 def is_safe_webhook_url(url):
     """
@@ -91,8 +94,42 @@ def preprocess_text(text, stemmer, stopword_remover):
     text = stemmer.stem(text)
     return text
 
+def get_preprocessed_matched(proposal_id, column):
+    """
+    Get preprocessed text for a specific proposal and column from cache.
+    Load the preprocessed texts file if not already cached.
+    """
+    global processed_texts_cache
+    
+    if column not in processed_texts_cache:
+        processed_path = f"indices/processed_{column}.csv"
+        try:
+            # Load preprocessed texts, assuming no header and single column
+            processed_df = pd.read_csv(processed_path, header=None)
+            processed_texts_cache[column] = processed_df[0]
+            print(f"Loaded preprocessed texts for column '{column}' from {processed_path}")
+        except FileNotFoundError:
+            print(f"Warning: Preprocessed file not found for column '{column}' at {processed_path}")
+            print(f"Falling back to real-time preprocessing for column '{column}'")
+            return None
+        except Exception as e:
+            print(f"Error loading preprocessed texts for column '{column}': {e}")
+            return None
+    
+    try:
+        # Get the preprocessed text for this proposal_id
+        # The proposal_id should correspond to the index in the dataframe
+        proposal_index = metadata.index.get_loc(proposal_id)
+        return processed_texts_cache[column].iloc[proposal_index]
+    except (KeyError, IndexError) as e:
+        print(f"Warning: Could not find preprocessed text for proposal_id {proposal_id} in column '{column}': {e}")
+        return None
+
 def load_indices():
-    global indices, metadata, stemmer, stopword_remover, original_texts
+    global indices, metadata, stemmer, stopword_remover, original_texts, processed_texts_cache
+    
+    # Clear any existing preprocessed text cache
+    processed_texts_cache.clear()
     print("Loading Indonesian language tools...")
     stemmer_factory = StemmerFactory()
     stemmer = stemmer_factory.create_stemmer()
@@ -121,7 +158,7 @@ def load_indices():
     print("All indices and models loaded successfully!")
 
 @performance_monitor("Single Search Processing")
-def _process_single_search(query_text, column, skema_filter=None, top_k=10):
+def _process_single_search(query_text, column, skema_filter=None, top_k=10, proposal_id=None):
     """
     Helper function to process a single search request.
     Used by both synchronous and asynchronous endpoints.
@@ -130,7 +167,15 @@ def _process_single_search(query_text, column, skema_filter=None, top_k=10):
     results = search_column(query_text, column, skema_filter, top_k)
     total_time_ms = (time.time() - start_time) * 1000
     log_search_metrics(query_text, column, len(results), total_time_ms)
-    return results
+    return {
+        "proposal_id": proposal_id,
+        "results": results,
+        "query_info": {
+            "column": column,
+            "skema_filter": skema_filter,
+            "total_results": len(results)
+        }
+    }
 
 def process_query_thread(query_data):
     """
@@ -321,15 +366,31 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
         if proposal_id in original_texts.index and column in original_texts.columns:
             matched_text = str(original_texts.loc[proposal_id, column]) if pd.notna(original_texts.loc[proposal_id, column]) else ""
 
+        # Try to get preprocessed text from cache, fallback to real-time preprocessing
+        pre_m = get_preprocessed_matched(proposal_id, column)
+        if pre_m is None:
+            # Fallback to real-time preprocessing if cached version not available
+            pre_m = preprocess_text(matched_text, stemmer, stopword_remover)
         
         # Calculate advanced similarity metrics
-        exact_score = jaccard_similarity(processed_query, matched_text)
-        fuzzy_score = levenshtein_similarity(processed_query, matched_text)
-        semantic_score = sentence_embedding_similarity(processed_query, matched_text)
-        final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score, processed_query, matched_text)
+        exact_score = jaccard_similarity(processed_query, pre_m)
+        fuzzy_score = levenshtein_similarity(processed_query, pre_m)
+        semantic_score = sentence_embedding_similarity(processed_query, pre_m)
+        # final_score = calculate_final_score(exact_score, fuzzy_score, semantic_score, processed_query, pre_m)
+        final_score = calculate_final_score(
+            similarity_score, semantic_score,
+            exact_score, fuzzy_score,
+            processed_query, pre_m
+        )
+        # Get judul from original_texts since it's not available in metadata
+        proposal_judul = ""
+        if proposal_id in original_texts.index and 'judul' in original_texts.columns:
+            proposal_judul = str(original_texts.loc[proposal_id, 'judul']) if pd.notna(original_texts.loc[proposal_id, 'judul']) else ""
 
-        # Get judul from metadata
-        proposal_judul = metadata.iloc[idx].get('judul', '') if 'judul' in metadata.columns else ''
+        # Add text highlighting if similarity score is high enough
+        highlighted_text = matched_text
+        if float(final_score) >= 0.5:  # Only highlight for reasonably similar texts
+            highlighted_text = highlight_similarities(query_text, matched_text)
 
         results.append({
             'id': int(proposal_id),
@@ -340,7 +401,8 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
             'semantic_score': float(semantic_score),
             'final_score': float(final_score),
             'column': column,
-            'matched_text': matched_text, # Truncate for API response
+            'matched_text': highlighted_text,  # Original text
+            # 'original_highlighted': highlighted_text,  # Add highlighted text field for frontend
             'judul': str(proposal_judul)  # Add judul field
         })
         if len(results) >= top_k:
@@ -359,6 +421,7 @@ def search():
         skema_filter = data.get('skema')
         top_k = data.get('top_k', 10)
         webhook_url = data.get('webhook_url')
+        proposal_id = data.get('proposal_id', None)
         
         if not query_text:
             return jsonify({"error": "query_text is required"}), 400
@@ -378,23 +441,22 @@ def search():
             
             def async_search():
                 try:
-                    results = _process_single_search(query_text, column, skema_filter, top_k)
+                    search_result = _process_single_search(query_text, column, skema_filter, top_k)
                     
                     webhook_payload = {
                         "job_id": job_id,
                         "status": "completed",
                         "timestamp": datetime.now().isoformat(),
-                        "results": results,
-                        "query_info": {
-                            "column": column,
-                            "skema_filter": skema_filter,
-                            "total_results": len(results)
-                        }
+                        "results": search_result["results"],
+                        "proposal_id": proposal_id,
+                        "api_version" : 'v2',
+                        "query_info": search_result["query_info"]
                     }
                     
                     # Send results to webhook
                     requests.post(webhook_url, json=webhook_payload, timeout=30)
                     print(f"Search results sent to webhook for job {job_id}")
+               
                     
                 except Exception as e:
                     error_payload = {
@@ -418,20 +480,14 @@ def search():
                 "job_id": job_id,
                 "status": "processing",
                 "message": "Search started. Results will be sent to webhook when complete.",
-                "webhook_url": webhook_url
+                "webhook_url": webhook_url,
+                "api_version" : 'v2'
             }), 202
         
         # Synchronous processing (original behavior)
         else:
-            results = _process_single_search(query_text, column, skema_filter, top_k)
-            return jsonify({
-                "results": results,
-                "query_info": {
-                    "column": column,
-                    "skema_filter": skema_filter,
-                    "total_results": len(results)
-                }
-            })
+            search_result = _process_single_search(query_text, column, skema_filter, top_k)
+            return jsonify(search_result)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -557,7 +613,7 @@ def info():
 
 def init_app():
     """Initialize the application - load indices if not already loaded."""
-    global indices, metadata, original_texts
+    global indices, metadata, original_texts, processed_texts_cache
     if not indices or metadata is None or original_texts is None:
         print("Initializing plagiarism detection API...")
         load_indices()
