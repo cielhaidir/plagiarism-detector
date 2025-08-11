@@ -1,0 +1,44 @@
+Test Category,Test Name,Status,Execution Time (ms),Message,Timestamp
+Whitebox,calculate_final_score - Normal Values,PASSED,0.0041,"Result: 0.7425, Expected base: 0.7425, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - All Zeros,PASSED,0.0021,"Result: 0.0, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Maximum Values,PASSED,0.0021,"Result: 1.0, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Empty strings,PASSED,0.0021,"Result: 0.1900, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Very long texts,PASSED,0.0021,"Result: 0.2070, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Single character,PASSED,0.0010,"Result: 0.9500, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Special characters only,PASSED,0.0010,"Result: 0.0595, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Numbers only,PASSED,0.0031,"Result: 0.1370, Time: 0.00ms",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Low Literal Match Penalty,PASSED,0.0010,"Applied penalty correctly. Result: 0.2900, Expected: 0.2900",2025-08-05 17:47:11
+Whitebox,calculate_final_score - TF-IDF/Semantic Mismatch Penalty,PASSED,0.0012,"Applied penalty correctly. Result: 0.4900, Expected: 0.4900",2025-08-05 17:47:11
+Whitebox,calculate_final_score - High Semantic Bonus,PASSED,0.0010,"Applied bonus correctly. Result: 0.8900, Expected: 0.8900",2025-08-05 17:47:11
+Whitebox,calculate_final_score - Extreme high values (≤ 1.0),PASSED,0.0012,Result correctly capped: 1.0000,2025-08-05 17:47:11
+Whitebox,calculate_final_score - High semantic with bonus (≤ 1.0),PASSED,0.0012,Result correctly capped: 0.9475,2025-08-05 17:47:11
+Whitebox,calculate_final_score - All maximum legal (≤ 1.0),PASSED,0.0041,Result correctly capped: 1.0000,2025-08-05 17:47:11
+Whitebox,calculate_final_score - Weight Sum Verification,PASSED,0.0010,Weights sum to 1.0: 1.0,2025-08-05 17:47:11
+Whitebox,calculate_final_score - Weight Distribution,PASSED,0.0010,Base score in reasonable range: 0.6850,2025-08-05 17:47:11
+Whitebox,jaccard_similarity - Normal Case,PASSED,0.0229,"Result: 0.3333, Time: 0.02ms",2025-08-05 17:47:11
+Whitebox,levenshtein_similarity - Normal Case,PASSED,0.0238,"Result: 0.6154, Time: 0.02ms",2025-08-05 17:47:11
+Whitebox,simple_preprocess_text - Normal Case,PASSED,0.1729,"Processed: 'hello world this is a test with  numbers and  links', Time: 0.17ms",2025-08-05 17:47:11
+Whitebox,ngrams - Normal Case,PASSED,0.0088,"Generated 3 3-grams, Time: 0.01ms",2025-08-05 17:47:11
+Blackbox,API Health Check,PASSED,13.0830,"API is healthy, indices_loaded: True, Time: 13.08ms",2025-08-05 17:47:11
+Blackbox,API Info Endpoint,PASSED,3.0339,"Info retrieved: 6 columns, 214 proposals, Time: 3.03ms",2025-08-05 17:47:11
+Blackbox,Valid Search - Judul,PASSED,313.4921,"Found 5 results, Time: 313.49ms",2025-08-05 17:47:11
+Blackbox,Valid Search - Judul - Result Structure,PASSED,N/A,All required fields present in results,2025-08-05 17:47:11
+Blackbox,Valid Search - Ringkasan,PASSED,124.9750,"Found 3 results, Time: 124.97ms",2025-08-05 17:47:11
+Blackbox,Valid Search - Ringkasan - Result Structure,PASSED,N/A,All required fields present in results,2025-08-05 17:47:11
+Blackbox,Search with Skema Filter,PASSED,100.4851,"Found 2 results, Time: 100.49ms",2025-08-05 17:47:11
+Blackbox,Search with Skema Filter - Result Structure,PASSED,N/A,All required fields present in results,2025-08-05 17:47:11
+Blackbox,Bulk Search - Valid Request,PASSED,257.8990,"Processed 2 queries, Time: 257.90ms",2025-08-05 17:47:12
+Blackbox,Bulk Search - Result Structure,PASSED,N/A,Bulk result structure is valid,2025-08-05 17:47:12
+Blackbox,Error Handling - Missing query_text,PASSED,2.7711,"Correctly returned HTTP 400, Time: 2.77ms",2025-08-05 17:47:12
+Blackbox,Error Handling - Missing column,PASSED,3.0160,"Correctly returned HTTP 400, Time: 3.02ms",2025-08-05 17:47:12
+Blackbox,Error Handling - Invalid column,PASSED,2.6569,"Correctly returned HTTP 400, Time: 2.66ms",2025-08-05 17:47:12
+Blackbox,Error Handling - Empty JSON,PASSED,3.5040,"Correctly returned HTTP 400, Time: 3.50ms",2025-08-05 17:47:12
+Blackbox,Edge Case - Very Long Query Text,PASSED,4.7669,"API handled gracefully (HTTP 200), Time: 4.77ms",2025-08-05 17:47:12
+Blackbox,Edge Case - Special Characters Query,PASSED,5.5449,"API handled gracefully (HTTP 200), Time: 5.54ms",2025-08-05 17:47:12
+Blackbox,Edge Case - Empty Query Text,PASSED,2.9490,"API handled gracefully (HTTP 400), Time: 2.95ms",2025-08-05 17:47:12
+Blackbox,Edge Case - Large top_k Value,PASSED,73.5550,"API handled gracefully (HTTP 200), Time: 73.55ms",2025-08-05 17:47:12
+Performance,calculate_final_score Performance (1000 iterations),PASSED,0.4351,"Avg time per call: 0.0004ms, Total: 0.44ms",2025-08-05 17:47:12
+Performance,jaccard_similarity Performance (300 iterations),PASSED,1.9171,"Avg time per call: 0.0064ms, Total: 1.92ms",2025-08-05 17:47:12
+Performance,levenshtein_similarity Performance (300 iterations),PASSED,0.1101,"Avg time per call: 0.0004ms, Total: 0.11ms",2025-08-05 17:47:12
+,,,,,
+SUMMARY,Total Tests: 41,Success Rate: 100.0%,Passed: 41,Failed: 0,2025-08-05 17:47:12

@@ -345,6 +345,7 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
     global indices, metadata, stemmer, stopword_remover, original_texts
     if column not in indices:
         return []
+    
     processed_query = preprocess_text(query_text, stemmer, stopword_remover)
     vectorizer = indices[column]['vectorizer']
     query_vector = vectorizer.transform([processed_query])
@@ -352,6 +353,7 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
     similarities = similarity_matrix[0]
     sorted_indices = np.argsort(similarities)[::-1]
     results = []
+    
     for idx in sorted_indices:
         similarity_score = similarities[idx]
         if similarity_score < 0.1:
@@ -372,6 +374,7 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
             # Fallback to real-time preprocessing if cached version not available
             pre_m = preprocess_text(matched_text, stemmer, stopword_remover)
         
+        
         # Calculate advanced similarity metrics
         exact_score = jaccard_similarity(processed_query, pre_m)
         fuzzy_score = levenshtein_similarity(processed_query, pre_m)
@@ -382,6 +385,8 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
             exact_score, fuzzy_score,
             processed_query, pre_m
         )
+        
+        
         # Get judul from original_texts since it's not available in metadata
         proposal_judul = ""
         if proposal_id in original_texts.index and 'judul' in original_texts.columns:
@@ -394,7 +399,7 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
 
         results.append({
             'id': int(proposal_id),
-            'skema': proposal_skema,
+            'skema': proposal_skema if proposal_skema else skema_filter,
             'similarity_score': float(similarity_score),  # legacy TF-IDF score
             'exact_score': float(exact_score),
             'fuzzy_score': float(fuzzy_score),
@@ -405,6 +410,8 @@ def search_column(query_text, column, skema_filter=None, top_k=10):
             # 'original_highlighted': highlighted_text,  # Add highlighted text field for frontend
             'judul': str(proposal_judul)  # Add judul field
         })
+        
+        
         if len(results) >= top_k:
             break
     return results

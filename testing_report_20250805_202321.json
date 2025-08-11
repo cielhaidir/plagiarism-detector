@@ -1,0 +1,305 @@
+{
+  "timestamp": "2025-08-05T20:23:19.754776",
+  "duration_seconds": 1.519892,
+  "summary": {
+    "total_tests": 41,
+    "whitebox_tests": 20,
+    "blackbox_tests": 18,
+    "performance_tests": 3,
+    "passed_tests": 41,
+    "failed_tests": 0
+  },
+  "whitebox_results": [
+    {
+      "name": "calculate_final_score - Normal Values",
+      "passed": true,
+      "message": "Result: 0.7425, Expected base: 0.7425, Time: 0.00ms",
+      "execution_time_ms": 0.0040531158447265625,
+      "timestamp": "2025-08-05T20:23:19.754818"
+    },
+    {
+      "name": "calculate_final_score - All Zeros",
+      "passed": true,
+      "message": "Result: 0.0, Time: 0.00ms",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754824"
+    },
+    {
+      "name": "calculate_final_score - Maximum Values",
+      "passed": true,
+      "message": "Result: 1.0, Time: 0.00ms",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754829"
+    },
+    {
+      "name": "calculate_final_score - Empty strings",
+      "passed": true,
+      "message": "Result: 0.1900, Time: 0.00ms",
+      "execution_time_ms": 0.0019073486328125,
+      "timestamp": "2025-08-05T20:23:19.754845"
+    },
+    {
+      "name": "calculate_final_score - Very long texts",
+      "passed": true,
+      "message": "Result: 0.2070, Time: 0.00ms",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754850"
+    },
+    {
+      "name": "calculate_final_score - Single character",
+      "passed": true,
+      "message": "Result: 0.9500, Time: 0.00ms",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754854"
+    },
+    {
+      "name": "calculate_final_score - Special characters only",
+      "passed": true,
+      "message": "Result: 0.0595, Time: 0.00ms",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754858"
+    },
+    {
+      "name": "calculate_final_score - Numbers only",
+      "passed": true,
+      "message": "Result: 0.1370, Time: 0.00ms",
+      "execution_time_ms": 0.0030994415283203125,
+      "timestamp": "2025-08-05T20:23:19.754865"
+    },
+    {
+      "name": "calculate_final_score - Low Literal Match Penalty",
+      "passed": true,
+      "message": "Applied penalty correctly. Result: 0.2900, Expected: 0.2900",
+      "execution_time_ms": 0.0021457672119140625,
+      "timestamp": "2025-08-05T20:23:19.754880"
+    },
+    {
+      "name": "calculate_final_score - TF-IDF/Semantic Mismatch Penalty",
+      "passed": true,
+      "message": "Applied penalty correctly. Result: 0.4900, Expected: 0.4900",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754885"
+    },
+    {
+      "name": "calculate_final_score - High Semantic Bonus",
+      "passed": true,
+      "message": "Applied bonus correctly. Result: 0.8900, Expected: 0.8900",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754899"
+    },
+    {
+      "name": "calculate_final_score - Extreme high values (≤ 1.0)",
+      "passed": true,
+      "message": "Result correctly capped: 1.0000",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754913"
+    },
+    {
+      "name": "calculate_final_score - High semantic with bonus (≤ 1.0)",
+      "passed": true,
+      "message": "Result correctly capped: 0.9475",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754916"
+    },
+    {
+      "name": "calculate_final_score - All maximum legal (≤ 1.0)",
+      "passed": true,
+      "message": "Result correctly capped: 1.0000",
+      "execution_time_ms": 0.0007152557373046875,
+      "timestamp": "2025-08-05T20:23:19.754919"
+    },
+    {
+      "name": "calculate_final_score - Weight Sum Verification",
+      "passed": true,
+      "message": "Weights sum to 1.0: 1.0",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754932"
+    },
+    {
+      "name": "calculate_final_score - Weight Distribution",
+      "passed": true,
+      "message": "Base score in reasonable range: 0.6850",
+      "execution_time_ms": 0.00095367431640625,
+      "timestamp": "2025-08-05T20:23:19.754934"
+    },
+    {
+      "name": "jaccard_similarity - Normal Case",
+      "passed": true,
+      "message": "Result: 0.3333, Time: 0.02ms",
+      "execution_time_ms": 0.019073486328125,
+      "timestamp": "2025-08-05T20:23:19.755261"
+    },
+    {
+      "name": "levenshtein_similarity - Normal Case",
+      "passed": true,
+      "message": "Result: 0.6154, Time: 0.02ms",
+      "execution_time_ms": 0.02384185791015625,
+      "timestamp": "2025-08-05T20:23:19.755289"
+    },
+    {
+      "name": "simple_preprocess_text - Normal Case",
+      "passed": true,
+      "message": "Processed: 'hello world this is a test with  numbers and  links', Time: 0.15ms",
+      "execution_time_ms": 0.15401840209960938,
+      "timestamp": "2025-08-05T20:23:19.755462"
+    },
+    {
+      "name": "ngrams - Normal Case",
+      "passed": true,
+      "message": "Generated 3 3-grams, Time: 0.01ms",
+      "execution_time_ms": 0.007867813110351562,
+      "timestamp": "2025-08-05T20:23:19.755491"
+    }
+  ],
+  "blackbox_results": [
+    {
+      "name": "API Health Check",
+      "passed": true,
+      "message": "API is healthy, indices_loaded: True, Time: 28.41ms",
+      "execution_time_ms": 28.408050537109375,
+      "timestamp": "2025-08-05T20:23:19.783960"
+    },
+    {
+      "name": "API Info Endpoint",
+      "passed": true,
+      "message": "Info retrieved: 6 columns, 214 proposals, Time: 8.06ms",
+      "execution_time_ms": 8.063077926635742,
+      "timestamp": "2025-08-05T20:23:19.792173"
+    },
+    {
+      "name": "Valid Search - Judul",
+      "passed": true,
+      "message": "Found 5 results, Time: 702.30ms",
+      "execution_time_ms": 702.2960186004639,
+      "timestamp": "2025-08-05T20:23:20.494598"
+    },
+    {
+      "name": "Valid Search - Judul - Result Structure",
+      "passed": true,
+      "message": "All required fields present in results",
+      "execution_time_ms": 0.0,
+      "timestamp": "2025-08-05T20:23:20.494606"
+    },
+    {
+      "name": "Valid Search - Ringkasan",
+      "passed": true,
+      "message": "Found 3 results, Time: 199.41ms",
+      "execution_time_ms": 199.40805435180664,
+      "timestamp": "2025-08-05T20:23:20.694143"
+    },
+    {
+      "name": "Valid Search - Ringkasan - Result Structure",
+      "passed": true,
+      "message": "All required fields present in results",
+      "execution_time_ms": 0.0,
+      "timestamp": "2025-08-05T20:23:20.694154"
+    },
+    {
+      "name": "Search with Skema Filter",
+      "passed": true,
+      "message": "Found 2 results, Time: 110.83ms",
+      "execution_time_ms": 110.83412170410156,
+      "timestamp": "2025-08-05T20:23:20.805125"
+    },
+    {
+      "name": "Search with Skema Filter - Result Structure",
+      "passed": true,
+      "message": "All required fields present in results",
+      "execution_time_ms": 0.0,
+      "timestamp": "2025-08-05T20:23:20.805136"
+    },
+    {
+      "name": "Bulk Search - Valid Request",
+      "passed": true,
+      "message": "Processed 2 queries, Time: 293.10ms",
+      "execution_time_ms": 293.1041717529297,
+      "timestamp": "2025-08-05T20:23:21.098417"
+    },
+    {
+      "name": "Bulk Search - Result Structure",
+      "passed": true,
+      "message": "Bulk result structure is valid",
+      "execution_time_ms": 0.0,
+      "timestamp": "2025-08-05T20:23:21.098425"
+    },
+    {
+      "name": "Error Handling - Missing query_text",
+      "passed": true,
+      "message": "Correctly returned HTTP 400, Time: 3.22ms",
+      "execution_time_ms": 3.217935562133789,
+      "timestamp": "2025-08-05T20:23:21.101726"
+    },
+    {
+      "name": "Error Handling - Missing column",
+      "passed": true,
+      "message": "Correctly returned HTTP 400, Time: 3.04ms",
+      "execution_time_ms": 3.0388832092285156,
+      "timestamp": "2025-08-05T20:23:21.104778"
+    },
+    {
+      "name": "Error Handling - Invalid column",
+      "passed": true,
+      "message": "Correctly returned HTTP 400, Time: 2.43ms",
+      "execution_time_ms": 2.4330615997314453,
+      "timestamp": "2025-08-05T20:23:21.107221"
+    },
+    {
+      "name": "Error Handling - Empty JSON",
+      "passed": true,
+      "message": "Correctly returned HTTP 400, Time: 2.31ms",
+      "execution_time_ms": 2.3107528686523438,
+      "timestamp": "2025-08-05T20:23:21.109543"
+    },
+    {
+      "name": "Edge Case - Very Long Query Text",
+      "passed": true,
+      "message": "API handled gracefully (HTTP 200), Time: 5.37ms",
+      "execution_time_ms": 5.370140075683594,
+      "timestamp": "2025-08-05T20:23:21.114985"
+    },
+    {
+      "name": "Edge Case - Special Characters Query",
+      "passed": true,
+      "message": "API handled gracefully (HTTP 200), Time: 7.14ms",
+      "execution_time_ms": 7.144927978515625,
+      "timestamp": "2025-08-05T20:23:21.122142"
+    },
+    {
+      "name": "Edge Case - Empty Query Text",
+      "passed": true,
+      "message": "API handled gracefully (HTTP 400), Time: 2.85ms",
+      "execution_time_ms": 2.847909927368164,
+      "timestamp": "2025-08-05T20:23:21.125001"
+    },
+    {
+      "name": "Edge Case - Large top_k Value",
+      "passed": true,
+      "message": "API handled gracefully (HTTP 200), Time: 145.21ms",
+      "execution_time_ms": 145.21288871765137,
+      "timestamp": "2025-08-05T20:23:21.270228"
+    }
+  ],
+  "performance_results": [
+    {
+      "name": "calculate_final_score Performance (1000 iterations)",
+      "passed": true,
+      "message": "Avg time per call: 0.0006ms, Total: 0.55ms",
+      "execution_time_ms": 0.5519390106201172,
+      "timestamp": "2025-08-05T20:23:21.270903"
+    },
+    {
+      "name": "jaccard_similarity Performance (300 iterations)",
+      "passed": true,
+      "message": "Avg time per call: 0.0090ms, Total: 2.69ms",
+      "execution_time_ms": 2.69317626953125,
+      "timestamp": "2025-08-05T20:23:21.273626"
+    },
+    {
+      "name": "levenshtein_similarity Performance (300 iterations)",
+      "passed": true,
+      "message": "Avg time per call: 0.0005ms, Total: 0.15ms",
+      "execution_time_ms": 0.15401840209960938,
+      "timestamp": "2025-08-05T20:23:21.273786"
+    }
+  ]
+}
