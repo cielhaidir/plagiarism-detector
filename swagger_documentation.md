@@ -606,6 +606,129 @@ paths:
                     type: string
                     example: "refreshing"
 
+  /index_proposals:
+    post:
+      summary: Yearly data indexing with year filtering
+      description: |
+        Endpoint untuk mengindeks proposal baru dengan filter tahun (2025+).
+        Mendukung pemrosesan sinkron dan asinkron dengan webhook support.
+        Otomatis menolak proposal dengan tahun < 2025.
+      tags:
+        - Indexing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - proposals
+              properties:
+                proposals:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - id
+                      - judul
+                      - skema
+                      - tahun
+                    properties:
+                      id:
+                        type: integer
+                        description: ID unik proposal
+                        example: 99991
+                      judul:
+                        type: string
+                        description: Judul proposal
+                        example: "Penerapan Machine Learning untuk Deteksi Plagiarisme"
+                      skema:
+                        type: string
+                        description: Skema proposal
+                        example: "Penelitian Dasar"
+                      tahun:
+                        type: integer
+                        description: Tahun proposal (harus >= 2025)
+                        example: 2025
+                      ringkasan:
+                        type: string
+                        description: Ringkasan proposal
+                      pendahuluan:
+                        type: string
+                        description: Pendahuluan proposal
+                      masalah:
+                        type: string
+                        description: Masalah yang diangkat
+                      metode:
+                        type: string
+                        description: Metode yang digunakan
+                      solusi:
+                        type: string
+                        description: Solusi yang ditawarkan
+                webhook_url:
+                  type: string
+                  format: uri
+                  description: URL webhook untuk pemrosesan asinkron
+                  example: "https://your-app.com/webhook/indexing-results"
+                year_threshold:
+                  type: integer
+                  default: 2025
+                  minimum: 2025
+                  description: Tahun minimum untuk proposal yang diterima
+                  example: 2025
+      responses:
+        '200':
+          description: Indexing completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Successfully indexed 2 proposals"
+                  indexed_count:
+                    type: integer
+                    example: 2
+                  year_threshold:
+                    type: integer
+                    example: 2025
+        '202':
+          description: Indexing started (asynchronous)
+          content:
+            application/json:
+              schema:
+                type: object
+                  properties:
+                    job_id:
+                      type: string
+                      format: uuid
+                      example: "550e8400-e29b-41d4-a716-446655440000"
+                    status:
+                      type: string
+                      example: "processing"
+                    message:
+                      type: string
+                      example: "Indexing started. Results will be sent to webhook when complete."
+                    year_threshold:
+                      type: integer
+                      example: 2025
+        '400':
+          description: Bad request - validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     QdrantSearchResult:
@@ -736,6 +859,125 @@ curl -X POST http://localhost:5000/search_bulk \
     "use_parallel": true
   }'
 ```
+
+## Contoh Penggunaan /index_proposals
+
+### Indexing Proposal Baru (2025+)
+```bash
+# Flask Server (Port 5000)
+curl -X POST http://localhost:5000/index_proposals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proposals": [
+      {
+        "id": 99991,
+        "judul": "Penerapan Machine Learning untuk Deteksi Plagiarisme",
+        "skema": "Penelitian Dasar",
+        "tahun": 2025,
+        "ringkasan": "Penelitian ini mengembangkan sistem deteksi plagiarisme menggunakan ML",
+        "pendahuluan": "Plagiarisme merupakan masalah serius dalam dunia akademik",
+        "masalah": "Bagaimana meningkatkan akurasi deteksi plagiarisme?",
+        "metode": "Menggunakan algoritma ensemble learning",
+        "solusi": "Sistem deteksi plagiarisme berbasis ML dengan akurasi 95%"
+      }
+    ],
+    "year_threshold": 2025
+  }'
+
+# Qdrant Server (Port 5001)
+curl -X POST http://localhost:5001/index_proposals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proposals": [
+      {
+        "id": 99992,
+        "judul": "Analisis Sentimen pada Review Produk E-commerce",
+        "skema": "Penelitian Terapan",
+        "tahun": 2025,
+        "ringkasan": "Menganalisis sentimen pelanggan terhadap produk e-commerce",
+        "pendahuluan": "Review produk menjadi sumber informasi penting",
+        "masalah": "Bagaimana meningkatkan akurasi analisis sentimen?",
+        "metode": "Implementasi LSTM dan transformer models",
+        "solusi": "Model analisis sentimen dengan akurasi 92%"
+      }
+    ]
+  }'
+
+# Asynchronous indexing with webhook
+curl -X POST http://localhost:5000/index_proposals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proposals": [...],
+    "webhook_url": "https://your-app.com/webhook/indexing-results"
+  }'
+```
+
+### Response Examples
+
+**Success Response (200):**
+```json
+{
+  "status": "success",
+  "message": "Successfully indexed 2 proposals",
+  "indexed_count": 2,
+  "year_threshold": 2025,
+  "filtered_count": 0,
+  "total_processed": 2
+}
+```
+
+**Asynchronous Response (202):**
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing",
+  "message": "Indexing started. Results will be sent to webhook when complete.",
+  "year_threshold": 2025
+}
+```
+
+**Validation Error (400):**
+```json
+{
+  "error": "Validation failed",
+  "details": [
+    "Proposal at index 0 missing required fields: ['skema']",
+    "Proposal at index 1 tahun must be >= 2025"
+  ]
+}
+```
+
+**Webhook Payload Example:**
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "timestamp": "2025-08-11T02:30:00Z",
+  "result": {
+    "status": "success",
+    "message": "Successfully indexed 2 proposals",
+    "indexed_count": 2,
+    "year_threshold": 2025
+  }
+}
+```
+
+## Error Handling
+
+### Year Filtering
+- **2025+**: Accepted for indexing
+- **2024 and below**: Automatically rejected with appropriate message
+
+### Validation Requirements
+- All required fields must be present: `id`, `judul`, `skema`, `tahun`
+- `tahun` must be >= `year_threshold` (default: 2025)
+- All text fields should be strings
+- `id` must be unique (duplicate IDs will be skipped)
+
+### Common Error Responses
+- **400 Bad Request**: Validation errors, missing required fields
+- **500 Internal Server Error**: Server-side processing errors
+- **503 Service Unavailable**: System is initializing
 
 ### Qdrant Server (Port 5001)
 ```bash

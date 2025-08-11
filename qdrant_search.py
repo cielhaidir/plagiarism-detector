@@ -261,6 +261,112 @@ class QdrantPlagiarismSearch:
             "vector_size": info.config.params.vectors.size,
             "distance_metric": str(info.config.params.vectors.distance)
         }
+    
+    def append_proposals(self, proposals_df: pd.DataFrame, year_threshold: int = 2025) -> Dict[str, Any]:
+        """Append new proposals to the existing Qdrant collection.
+        
+        Args:
+            proposals_df: DataFrame containing new proposals
+            year_threshold: Minimum year for proposals to be indexed
+            
+        Returns:
+            Dict with indexing results and statistics
+        """
+        if not self.collection_exists():
+            return {
+                "error": "Collection does not exist. Please initialize collection first.",
+                "indexed_count": 0,
+                "filtered_count": 0,
+                "total_input": len(proposals_df)
+            }
+        
+        # Filter proposals by year
+        if 'tahun' in proposals_df.columns:
+            # Ensure year_threshold is numeric, handle null/invalid values
+            try:
+                if year_threshold is None or year_threshold == 'null' or year_threshold == '':
+                    year_threshold = 2025
+                else:
+                    year_threshold = int(year_threshold)
+            except (ValueError, TypeError):
+                print(f"Invalid year_threshold value: {year_threshold}, defaulting to 2025")
+                year_threshold = 2025
+            
+            # Convert tahun to numeric, handling any non-numeric values
+            proposals_df = proposals_df.copy()  # Avoid modifying original DataFrame
+            proposals_df['tahun'] = pd.to_numeric(proposals_df['tahun'], errors='coerce')
+            
+            # Filter out rows with invalid/NaN years and apply year threshold
+            valid_years_mask = proposals_df['tahun'].notna()
+            year_threshold_mask = proposals_df['tahun'] >= year_threshold
+            
+            filtered_df = proposals_df[valid_years_mask & year_threshold_mask].copy()
+            filtered_count = len(proposals_df) - len(filtered_df)
+            
+            print(f"Year filtering: {len(proposals_df)} total -> {len(filtered_df)} after filtering (>= {year_threshold})")
+        else:
+            filtered_df = proposals_df.copy()
+            filtered_count = 0
+        
+        if len(filtered_df) == 0:
+            return {
+                "message": f"No proposals found with year >= {year_threshold}",
+                "indexed_count": 0,
+                "filtered_count": filtered_count,
+                "total_input": len(proposals_df),
+                "year_threshold": year_threshold
+            }
+        
+        # Get current max point ID to avoid conflicts
+        try:
+            stats = self.get_stats()
+            current_max_id = stats["total_points"]
+        except:
+            current_max_id = 0
+        
+        print(f"Appending {len(filtered_df)} proposals to Qdrant collection...")
+        points = []
+        
+        for idx, row in filtered_df.iterrows():
+            for column in self.text_columns:
+                text = str(row.get(column, ""))
+                if text and len(text.strip()) > 10:  # Skip empty/short texts
+                    # Create embedding
+                    embedding = self.create_embeddings([text])[0]
+                    
+                    # Store point with unique ID
+                    points.append(PointStruct(
+                        id=current_max_id + len(points),
+                        vector=embedding,
+                        payload={
+                            "proposal_id": int(row['id']),
+                            "skema": str(row['skema']),
+                            "column": column,
+                            "text": text,
+                            "original_text": text,  # Keep original for display
+                            "judul": str(row['judul'])  # Add judul field
+                        }
+                    ))
+        
+        if points:
+            # Batch upload new points
+            self.client.upload_points(
+                collection_name=self.collection_name,
+                points=points
+            )
+            
+            print(f"Successfully appended {len(points)} text segments from {len(filtered_df)} proposals")
+        
+        return {
+            "message": f"Successfully indexed {len(filtered_df)} proposals",
+            "indexed_count": len(filtered_df),
+            "text_segments_added": len(points),
+            "filtered_count": filtered_count,
+            "total_input": len(proposals_df),
+            "year_threshold": year_threshold
+        }
+
+# Global instance</search>
 
 # Global instance
 _qdrant_search = None

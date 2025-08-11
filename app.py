@@ -35,6 +35,9 @@ from similarity_utils import (
     highlight_similarities
 )
 from performance_monitor import performance_monitor, PerformanceTracker, log_search_metrics, log_bulk_metrics
+import sys
+sys.path.append('.')
+# Remove import of append_indices - we'll implement direct TF-IDF appending
 
 app = Flask(__name__)
 
@@ -156,6 +159,132 @@ def load_indices():
     print("Pre-loading sentence transformer model for faster queries...")
     initialize_sentence_model()
     print("All indices and models loaded successfully!")
+
+def append_proposals_to_tfidf(proposals_df, year_threshold=2025):
+    """
+    Append new proposals to the existing TF-IDF indices and metadata.
+    
+    Args:
+        proposals_df: DataFrame containing new proposals
+        year_threshold: Minimum year for proposals to be indexed
+        
+    Returns:
+        Dict with indexing results and statistics
+    """
+    global indices, metadata, original_texts, processed_texts_cache
+    
+    if not indices or metadata is None:
+        return {
+            "error": "TF-IDF indices not loaded. Please initialize the system first.",
+            "indexed_count": 0,
+            "filtered_count": 0,
+            "total_input": len(proposals_df)
+        }
+    
+    # Filter proposals by year
+    if 'tahun' in proposals_df.columns:
+        # Ensure year_threshold is numeric, handle null/invalid values
+        try:
+            if year_threshold is None or year_threshold == 'null' or year_threshold == '':
+                year_threshold = 2025
+            else:
+                year_threshold = int(year_threshold)
+        except (ValueError, TypeError):
+            print(f"Invalid year_threshold value: {year_threshold}, defaulting to 2025")
+            year_threshold = 2025
+        
+        # Convert tahun to numeric, handling any non-numeric values
+        proposals_df = proposals_df.copy()  # Avoid modifying original DataFrame
+        proposals_df['tahun'] = pd.to_numeric(proposals_df['tahun'], errors='coerce')
+        
+        # Filter out rows with invalid/NaN years and apply year threshold
+        valid_years_mask = proposals_df['tahun'].notna()
+        year_threshold_mask = proposals_df['tahun'] >= year_threshold
+        
+        filtered_df = proposals_df[valid_years_mask & year_threshold_mask].copy()
+        filtered_count = len(proposals_df) - len(filtered_df)
+        
+        print(f"Year filtering: {len(proposals_df)} total -> {len(filtered_df)} after filtering (>= {year_threshold})")
+    else:
+        filtered_df = proposals_df.copy()
+        filtered_count = 0
+    
+    if len(filtered_df) == 0:
+        return {
+            "message": f"No proposals found with year >= {year_threshold}",
+            "indexed_count": 0,
+            "filtered_count": filtered_count,
+            "total_input": len(proposals_df),
+            "year_threshold": year_threshold
+        }
+    
+    print(f"Processing {len(filtered_df)} proposals (filtered from {len(proposals_df)})")
+    
+    # Clear preprocessed text cache since we're adding new data
+    processed_texts_cache.clear()
+    
+    text_columns = ['judul', 'ringkasan', 'pendahuluan', 'masalah', 'metode', 'solusi']
+    
+    try:
+        # Update metadata
+        new_metadata = filtered_df[['skema', 'tahun']].copy()
+        new_metadata.index = filtered_df['id']
+        metadata = pd.concat([metadata, new_metadata])
+        
+        # Update original_texts
+        new_original_texts = filtered_df.copy()
+        new_original_texts.index = filtered_df['id']
+        original_texts = pd.concat([original_texts, new_original_texts])
+        
+        # Update TF-IDF indices for each column
+        for column in text_columns:
+            if column in filtered_df.columns:
+                print(f"  Updating TF-IDF index for column '{column}'...")
+                
+                # Get existing vectorizer and matrix
+                vectorizer = indices[column]['vectorizer']
+                existing_matrix = indices[column]['matrix']
+                
+                # Preprocess new texts for this column
+                new_texts = []
+                for _, row in filtered_df.iterrows():
+                    text = str(row.get(column, ""))
+                    if text and text != "nan":
+                        processed_text = preprocess_text(text, stemmer, stopword_remover)
+                        new_texts.append(processed_text)
+                    else:
+                        new_texts.append("")
+                
+                # Transform new texts using existing vectorizer
+                if new_texts:
+                    new_matrix = vectorizer.transform(new_texts)
+                    
+                    # Concatenate with existing matrix
+                    from scipy.sparse import vstack
+                    combined_matrix = vstack([existing_matrix, new_matrix])
+                    
+                    # Update the index
+                    indices[column]['matrix'] = combined_matrix
+        
+        print(f"Successfully appended {len(filtered_df)} proposals to TF-IDF indices")
+        
+        return {
+            "message": f"Successfully indexed {len(filtered_df)} proposals",
+            "indexed_count": len(filtered_df),
+            "filtered_count": filtered_count,
+            "total_input": len(proposals_df),
+            "year_threshold": year_threshold,
+            "updated_columns": text_columns
+        }
+        
+    except Exception as e:
+        print(f"Error appending proposals to TF-IDF indices: {e}")
+        return {
+            "error": f"Failed to append proposals: {str(e)}",
+            "indexed_count": 0,
+            "filtered_count": filtered_count,
+            "total_input": len(proposals_df)
+        }
 
 @performance_monitor("Single Search Processing")
 def _process_single_search(query_text, column, skema_filter=None, top_k=10, proposal_id=None):
@@ -602,6 +731,104 @@ def search_bulk():
                 "processing_method": "parallel" if use_parallel else "sequential",
                 "max_workers": max_workers if use_parallel else None
             })
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/index_proposals', methods=['POST'])
+def index_proposals():
+    """
+    Endpoint to index new proposals with year filtering (2025+).
+    Supports both synchronous and asynchronous processing with webhook support.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        proposals = data.get('proposals', [])
+        webhook_url = data.get('webhook_url')
+        year_threshold = data.get('year_threshold', 2025)
+        
+        if not proposals:
+            return jsonify({"error": "proposals array is required"}), 400
+        
+        # Validate proposal structure
+        required_fields = ['id', 'judul', 'skema', 'tahun']
+        text_columns = ['judul', 'ringkasan', 'pendahuluan', 'masalah', 'metode', 'solusi']
+        
+        validation_errors = []
+        for i, proposal in enumerate(proposals):
+            if not isinstance(proposal, dict):
+                validation_errors.append(f"Proposal at index {i} must be an object")
+                continue
+                
+            missing_fields = [field for field in required_fields if field not in proposal]
+            if missing_fields:
+                validation_errors.append(f"Proposal at index {i} missing required fields: {missing_fields}")
+        
+        if validation_errors:
+            return jsonify({
+                "error": "Validation failed",
+                "details": validation_errors
+            }), 400
+        
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_index_proposals():
+                try:
+                    # Convert proposals to DataFrame
+                    proposals_df = pd.DataFrame(proposals)
+                    
+                    # Process indexing using TF-IDF append function
+                    result = append_proposals_to_tfidf(proposals_df, year_threshold)
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "result": result,
+                        "year_threshold": year_threshold
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Indexing results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Indexing failed for job {job_id}: {e}")
+            
+            # Start async processing
+            index_thread = threading.Thread(target=async_index_proposals)
+            index_thread.daemon = True
+            index_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Indexing started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url,
+                "year_threshold": year_threshold
+            }), 202
+        
+        # Synchronous processing
+        else:
+            proposals_df = pd.DataFrame(proposals)
+            result = append_proposals_to_tfidf(proposals_df, year_threshold)
+            
+            return jsonify(result)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500

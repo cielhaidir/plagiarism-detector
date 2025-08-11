@@ -5,6 +5,10 @@ import time
 import requests
 import uuid
 from datetime import datetime
+import pandas as pd
+import sys
+sys.path.append('.')
+# Remove import of append_indices - we'll use qdrant_search.append_proposals instead
 
 app = Flask(__name__)
 
@@ -56,6 +60,8 @@ def search():
         limit = data.get('top_k', 10)
         threshold = data.get('threshold', 0.7)
         webhook_url = data.get('webhook_url')
+        proposal_id = data.get('proposal_id', None)
+        
         
         if not query_text:
             return jsonify({"error": "query_text is required"}), 400
@@ -79,6 +85,7 @@ def search():
                         "status": "completed",
                         "timestamp": datetime.now().isoformat(),
                         "results": results,
+                        "proposal_id": proposal_id,
                         "query_info": {
                             "column": column,
                             "skema_filter": skema_filter,
@@ -317,6 +324,117 @@ def refresh():
             "message": "Qdrant collection refresh initiated",
             "status": "refreshing"
         })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/index_proposals', methods=['POST'])
+def index_proposals():
+    """
+    Endpoint to index new proposals with year filtering (2025+).
+    Supports both synchronous and asynchronous processing with webhook support.
+    """
+    if not initialization_complete:
+        return jsonify({"error": "System is still initializing, please wait..."}), 503
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        proposals = data.get('proposals', [])
+        webhook_url = data.get('webhook_url')
+        year_threshold_raw = data.get('year_threshold', 2025)
+        
+        # Handle null/invalid year_threshold values
+        try:
+            if year_threshold_raw is None or year_threshold_raw == 'null' or year_threshold_raw == '':
+                year_threshold = 2025
+            else:
+                year_threshold = int(year_threshold_raw)
+        except (ValueError, TypeError):
+            print(f"Invalid year_threshold value: {year_threshold_raw}, defaulting to 2025")
+            year_threshold = 2025
+        
+        if not proposals:
+            return jsonify({"error": "proposals array is required"}), 400
+        
+        # Validate proposal structure
+        required_fields = ['id', 'judul', 'skema', 'tahun']
+        text_columns = ['judul', 'ringkasan', 'pendahuluan', 'masalah', 'metode', 'solusi']
+        
+        validation_errors = []
+        for i, proposal in enumerate(proposals):
+            if not isinstance(proposal, dict):
+                validation_errors.append(f"Proposal at index {i} must be an object")
+                continue
+                
+            missing_fields = [field for field in required_fields if field not in proposal]
+            if missing_fields:
+                validation_errors.append(f"Proposal at index {i} missing required fields: {missing_fields}")
+        
+        if validation_errors:
+            return jsonify({
+                "error": "Validation failed",
+                "details": validation_errors
+            }), 400
+        
+        # If webhook URL is provided, process asynchronously
+        if webhook_url:
+            job_id = str(uuid.uuid4())
+            
+            def async_index_proposals():
+                try:
+                    # Convert proposals to DataFrame
+                    proposals_df = pd.DataFrame(proposals)
+                    
+                    # Process indexing using Qdrant search instance
+                    result = qdrant_search.append_proposals(proposals_df, year_threshold)
+                    
+                    webhook_payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat(),
+                        "result": result,
+                        "year_threshold": year_threshold
+                    }
+                    
+                    # Send results to webhook
+                    requests.post(webhook_url, json=webhook_payload, timeout=30)
+                    print(f"Indexing results sent to webhook for job {job_id}")
+                    
+                except Exception as e:
+                    error_payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+                    try:
+                        requests.post(webhook_url, json=error_payload, timeout=30)
+                    except:
+                        pass
+                    print(f"Indexing failed for job {job_id}: {e}")
+            
+            # Start async processing
+            index_thread = threading.Thread(target=async_index_proposals)
+            index_thread.daemon = True
+            index_thread.start()
+            
+            return jsonify({
+                "job_id": job_id,
+                "status": "processing",
+                "message": "Indexing started. Results will be sent to webhook when complete.",
+                "webhook_url": webhook_url,
+                "year_threshold": year_threshold
+            }), 202
+        
+        # Synchronous processing
+        else:
+            proposals_df = pd.DataFrame(proposals)
+            result = qdrant_search.append_proposals(proposals_df, year_threshold)
+            
+            return jsonify(result)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
