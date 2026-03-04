@@ -360,7 +360,8 @@ def index_proposals():
             return jsonify({"error": "proposals array is required"}), 400
         
         # Validate proposal structure
-        required_fields = ['id', 'judul', 'skema', 'tahun']
+        required_fields = ['id', 'judul', 'skema', 'tahun', 'pengusul']
+        optional_fields = ['year']  # 'year' is optional since we can fall back to 'tahun'
         text_columns = ['judul', 'ringkasan', 'pendahuluan', 'masalah', 'metode', 'solusi']
         
         validation_errors = []

@@ -106,7 +106,7 @@ class QdrantPlagiarismSearch:
         return " ".join(result_words)
     
     
-    def initialize_collection(self, csv_path: str = "skripsi_with_skema.csv"):
+    def initialize_collection(self, csv_path: str = "skripsi_with_skema_merged.csv"):
         """Initialize Qdrant collection with proposal data."""
         print("Loading proposal data...")
         df = pd.read_csv(csv_path)
@@ -140,7 +140,9 @@ class QdrantPlagiarismSearch:
                             "column": column,
                             "text": text,
                             "original_text": text,  # Keep original for display
-                            "judul": str(row['judul'])  # Add judul field
+                            "judul": str(row['judul']),  # Add judul field
+                            "pengusul": str(row.get('nama_ketua')),  # Add pengusul field
+                            "year": int(row.get('year', row.get('tahun', 0)))  # Add year field (check both 'year' and 'tahun' columns)
                         }
                     ))
         
@@ -206,7 +208,9 @@ class QdrantPlagiarismSearch:
                 "similarity_score": float(hit.score),
                 "matched_text": highlighted_text,  # Use highlighted text
                 "original_highlighted": highlighted_text,  # Add original_highlighted field for frontend
-                "judul": payload.get("judul", "")  # Add judul field
+                "judul": payload.get("judul", ""),  # Add judul field
+                "pengusul": payload.get("pengusul", ""),  # Add pengusul field
+                "year": payload.get("year", 0)  # Add year field
             })
         
         return results
@@ -344,7 +348,9 @@ class QdrantPlagiarismSearch:
                             "column": column,
                             "text": text,
                             "original_text": text,  # Keep original for display
-                            "judul": str(row['judul'])  # Add judul field
+                            "judul": str(row['judul']),  # Add judul field
+                            "pengusul": str(row.get('pengusul', '')),  # Add pengusul field
+                            "year": int(row.get('year', row.get('tahun', 0)))  # Add year field (check both 'year' and 'tahun' columns)
                         }
                     ))
         
