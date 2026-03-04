@@ -111,8 +111,12 @@ class QdrantPlagiarismSearch:
         print("Loading proposal data...")
         df = pd.read_csv(csv_path)
         
-        # Create collection
-        self.client.recreate_collection(
+        # Create collection (recreate_collection removed in qdrant-client >= 1.7)
+        try:
+            self.client.delete_collection(self.collection_name)
+        except Exception:
+            pass  # Collection may not exist yet
+        self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=VectorParams(
                 size=512,  # distiluse-base-multilingual-cased-v2 dimension
@@ -180,14 +184,24 @@ class QdrantPlagiarismSearch:
                 ))
             search_filter = models.Filter(must=conditions)
         
-        # Search
-        search_result = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_embedding,
-            query_filter=search_filter,
-            limit=limit,
-            score_threshold=threshold
-        )
+        # Search (compatible with qdrant-client >= 1.7)
+        try:
+            search_result = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_embedding,
+                query_filter=search_filter,
+                limit=limit,
+                score_threshold=threshold
+            ).points
+        except AttributeError:
+            # Fallback for older qdrant-client versions
+            search_result = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_embedding,
+                query_filter=search_filter,
+                limit=limit,
+                score_threshold=threshold
+            )
         
         # Format results
         results = []
