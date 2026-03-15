@@ -30,8 +30,7 @@ services:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
     volumes:
-      - ./skripsi_with_skema.csv:/app/skripsi_with_skema.csv:ro
-      - ./indices:/app/indices:ro
+      - ./:/app
     depends_on:
       - qdrant
     networks:
@@ -47,8 +46,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./skripsi_with_skema.csv:/app/skripsi_with_skema.csv:ro
-      - ./indices:/app/indices:ro
+      - ./:/app
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
