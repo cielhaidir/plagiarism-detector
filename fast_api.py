@@ -7,11 +7,18 @@ import uuid
 from datetime import datetime
 import pandas as pd
 import sys
+import logging
 sys.path.append('.')
 # Remove import of append_indices - we'll use qdrant_search.append_proposals instead
 
 app = Flask(__name__)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+ 
 # Global Qdrant search instance
 qdrant_search = None
 initialization_complete = True
@@ -52,6 +59,7 @@ def search():
     try:
         data = request.get_json()
         if not data:
+            logger.warning("/search called without JSON payload from ip=%s", request.remote_addr)
             return jsonify({"error": "No JSON data provided"}), 400
         
         query_text = data.get('query_text')
@@ -61,9 +69,21 @@ def search():
         threshold = data.get('threshold', 0.7)
         webhook_url = data.get('webhook_url')
         proposal_id = data.get('proposal_id', None)
-        
+
+        logger.info(
+            "/search request received ip=%s proposal_id=%s column=%s skema=%s top_k=%s threshold=%s webhook=%s query_length=%s",
+            request.remote_addr,
+            proposal_id,
+            column,
+            skema_filter,
+            limit,
+            threshold,
+            bool(webhook_url),
+            len(query_text) if query_text else 0,
+        )
         
         if not query_text:
+            logger.warning("/search missing query_text ip=%s proposal_id=%s", request.remote_addr, proposal_id)
             return jsonify({"error": "query_text is required"}), 400
         
         # If webhook URL is provided, process asynchronously
@@ -72,12 +92,19 @@ def search():
             
             def async_search():
                 try:
+                    logger.info("/search async job started job_id=%s proposal_id=%s", job_id, proposal_id)
                     results = qdrant_search.search(
                         query_text=query_text,
                         column=column,
                         skema_filter=skema_filter,
                         limit=limit,
                         threshold=threshold
+                    )
+                    logger.info(
+                        "/search async job completed job_id=%s proposal_id=%s result_count=%s",
+                        job_id,
+                        proposal_id,
+                        len(results)
                     )
                     
                     webhook_payload = {
@@ -96,7 +123,7 @@ def search():
                     
                     # Send results to webhook
                     requests.post(webhook_url, json=webhook_payload, timeout=30)
-                    print(f"Search results sent to webhook for job {job_id}")
+                    logger.info("/search webhook delivered job_id=%s webhook_url=%s", job_id, webhook_url)
                     
                 except Exception as e:
                     error_payload = {
@@ -107,14 +134,15 @@ def search():
                     }
                     try:
                         requests.post(webhook_url, json=error_payload, timeout=30)
-                    except:
-                        pass
-                    print(f"Search failed for job {job_id}: {e}")
+                    except Exception:
+                        logger.exception("/search failed to send error payload job_id=%s webhook_url=%s", job_id, webhook_url)
+                    logger.exception("/search async job failed job_id=%s proposal_id=%s", job_id, proposal_id)
             
             # Start async processing
             search_thread = threading.Thread(target=async_search)
             search_thread.daemon = True
             search_thread.start()
+            logger.info("/search accepted async request job_id=%s proposal_id=%s", job_id, proposal_id)
             
             return jsonify({
                 "job_id": job_id,
@@ -125,6 +153,7 @@ def search():
         
         # Synchronous processing (original behavior)
         else:
+            logger.info("/search sync execution started proposal_id=%s", proposal_id)
             results = qdrant_search.search(
                 query_text=query_text,
                 column=column,
@@ -132,6 +161,7 @@ def search():
                 limit=limit,
                 threshold=threshold
             )
+            logger.info("/search sync execution completed proposal_id=%s result_count=%s", proposal_id, len(results))
             
             return jsonify({
                 "results": results,
@@ -144,6 +174,7 @@ def search():
             })
         
     except Exception as e:
+        logger.exception("/search request failed")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/search_bulk', methods=['POST'])
