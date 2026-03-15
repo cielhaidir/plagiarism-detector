@@ -15,9 +15,14 @@ app = Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(name)s] %(message)s'
+    format='%(asctime)s %(levelname)s [%(name)s] %(message)s',
+    stream=sys.stdout,
+    force=True
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+app.logger.handlers = logger.handlers
+app.logger.setLevel(logging.INFO)
  
 # Global Qdrant search instance
 qdrant_search = None
