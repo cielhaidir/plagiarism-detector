@@ -8,15 +8,23 @@ from datetime import datetime
 import pandas as pd
 import sys
 import logging
+import os
 sys.path.append('.')
 # Remove import of append_indices - we'll use qdrant_search.append_proposals instead
 
 app = Flask(__name__)
 
+log_dir = 'logs'
+os.makedirs(log_dir, exist_ok=True)
+log_file_path = os.path.join(log_dir, 'fast_api.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s [%(name)s] %(message)s',
-    stream=sys.stdout,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_file_path, encoding='utf-8')
+    ],
     force=True
 )
 logger = logging.getLogger(__name__)
